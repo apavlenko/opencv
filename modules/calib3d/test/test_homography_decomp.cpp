@@ -1,8 +1,5 @@
 /*M///////////////////////////////////////////////////////////////////////////////////////
  //
- // This is a test file for the function decomposeHomography contributed to OpenCV
- // by Samson Yilma.
- //
  //  IMPORTANT: READ BEFORE DOWNLOADING, COPYING, INSTALLING OR USING.
  //
  //  By downloading, copying, installing or using the software you agree to this license.
@@ -14,7 +11,6 @@
  //                For Open Source Computer Vision Library
  //
  // Copyright (C) 2014, Samson Yilma¸ (samson_yilma@yahoo.com), all rights reserved.
- //
  // Third party copyrights are property of their respective owners.
  //
  // Redistribution and use in source and binary forms, with or without modification,
@@ -42,6 +38,9 @@
  // the use of this software, even if advised of the possibility of such damage.
  //
  //M*/
+
+ // This is a test file for the function decomposeHomography contributed to OpenCV
+ // by Samson Yilma.
 
 #include "test_precomp.hpp"
 #include "opencv2/calib3d.hpp"
