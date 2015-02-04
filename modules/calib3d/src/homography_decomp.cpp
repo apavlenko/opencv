@@ -1,11 +1,5 @@
 /*M///////////////////////////////////////////////////////////////////////////////////////
  //
- // This is a homography decomposition implementation contributed to OpenCV
- // by Samson Yilma. It implements the homography decomposition algorithm
- // descriped in the research report:
- // Malis, E and Vargas, M, "Deeper understanding of the homography decomposition
- // for vision-based control", Research Report 6303, INRIA (2007)
- //
  //  IMPORTANT: READ BEFORE DOWNLOADING, COPYING, INSTALLING OR USING.
  //
  //  By downloading, copying, installing or using the software you agree to this license.
@@ -17,7 +11,6 @@
  //                For Open Source Computer Vision Library
  //
  // Copyright (C) 2014, Samson Yilma¸ (samson_yilma@yahoo.com), all rights reserved.
- //
  // Third party copyrights are property of their respective owners.
  //
  // Redistribution and use in source and binary forms, with or without modification,
@@ -45,6 +38,13 @@
  // the use of this software, even if advised of the possibility of such damage.
  //
  //M*/
+
+ // This is a homography decomposition implementation contributed to OpenCV
+ // by Samson Yilma. It implements the homography decomposition algorithm
+ // descriped in the research report:
+ // Malis, E and Vargas, M, "Deeper understanding of the homography decomposition
+ // for vision-based control", Research Report 6303, INRIA (2007)
+
 
 #include "precomp.hpp"
 #include <memory>
