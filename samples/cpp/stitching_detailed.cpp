@@ -38,7 +38,6 @@
 // or tort (including negligence or otherwise) arising in any way out of
 // the use of this software, even if advised of the possibility of such damage.
 //
-//
 //M*/
 
 #include <iostream>
