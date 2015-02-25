@@ -37,9 +37,10 @@
 // or tort (including negligence or otherwise) arising in any way out of
 // the use of this software, even if advised of the possibility of such damage.
 //
-// 2011 Jason Newton <nevion@gmail.com>
 //M*/
-//
+
+// 2011 Jason Newton <nevion@gmail.com>
+
 #include "precomp.hpp"
 #include <vector>
 

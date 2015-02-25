@@ -6,29 +6,6 @@
 //  If you do not agree to this license, do not download, install,
 //  copy or use the software.
 //
-//  INFORMATION REGARDING THE CONTRIBUTION:
-//
-//  Author: Ovidiu Parvu
-//  Affiliation: Brunel University
-//  Created: 11.09.2013
-//  E-mail: <ovidiu.parvu[AT]gmail.com>
-//  Web: http://people.brunel.ac.uk/~cspgoop
-//
-//  These functions were implemented during Ovidiu Parvu's first year as a PhD student at
-//  Brunel University, London, UK. The PhD project is supervised by prof. David Gilbert (principal)
-//  and prof. Nigel Saunders (second).
-//
-//  THE IMPLEMENTATION OF THE MODULES IS BASED ON THE FOLLOWING PAPERS:
-//
-//  [1] V. Klee and M. C. Laskowski, "Finding the smallest triangles containing a given convex
-//  polygon", Journal of Algorithms, vol. 6, no. 3, pp. 359-375, Sep. 1985.
-//  [2] J. O'Rourke, A. Aggarwal, S. Maddila, and M. Baldwin, "An optimal algorithm for finding
-//  minimal enclosing triangles", Journal of Algorithms, vol. 7, no. 2, pp. 258-269, Jun. 1986.
-//
-//  The overall complexity of the algorithm is theta(n) where "n" represents the number
-//  of vertices in the convex polygon.
-//
-//
 //
 //                           License Agreement
 //                For Open Source Computer Vision Library
@@ -63,6 +40,30 @@
 // the use of this software, even if advised of the possibility of such damage.
 //
 //M*/
+
+/*
+//  INFORMATION REGARDING THE CONTRIBUTION:
+//
+//  Author: Ovidiu Parvu
+//  Affiliation: Brunel University
+//  Created: 11.09.2013
+//  E-mail: <ovidiu.parvu[AT]gmail.com>
+//  Web: http://people.brunel.ac.uk/~cspgoop
+//
+//  These functions were implemented during Ovidiu Parvu's first year as a PhD student at
+//  Brunel University, London, UK. The PhD project is supervised by prof. David Gilbert (principal)
+//  and prof. Nigel Saunders (second).
+//
+//  THE IMPLEMENTATION OF THE MODULES IS BASED ON THE FOLLOWING PAPERS:
+//
+//  [1] V. Klee and M. C. Laskowski, "Finding the smallest triangles containing a given convex
+//  polygon", Journal of Algorithms, vol. 6, no. 3, pp. 359-375, Sep. 1985.
+//  [2] J. O'Rourke, A. Aggarwal, S. Maddila, and M. Baldwin, "An optimal algorithm for finding
+//  minimal enclosing triangles", Journal of Algorithms, vol. 7, no. 2, pp. 258-269, Jun. 1986.
+//
+//  The overall complexity of the algorithm is theta(n) where "n" represents the number
+//  of vertices in the convex polygon.
+*/
 
 #include "precomp.hpp"
 
