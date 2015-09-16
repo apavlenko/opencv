@@ -10,8 +10,8 @@
 
 #include "common.hpp"
 
-const char oclProgB2B[] = "// clBuffer to clBuffer";
-const char oclProgI2B[] = "// clImage to clBuffer";
+const char oclProgB2B[] = "// clBuffer to clBuffer, NYI";
+const char oclProgI2B[] = "// clImage to clBuffer, NYI";
 const char oclProgI2I[] = \
   "__constant sampler_t sampler = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_NEAREST; \n" \
     "\n" \
@@ -72,7 +72,7 @@ void dumpCLinfo()
     }
     catch(...)
     {
-        LOGE( "OpenCL info: unknown error while gathering OpenCL info" );
+        LOGE( "dumpCLinfo: unknown error while gathering OpenCL info" );
     }
     LOGD("*******************");
 }
@@ -81,6 +81,8 @@ cl::Context theContext;
 cl::CommandQueue theQueue;
 cl::Program theProgB2B, theProgI2B, theProgI2I;
 bool haveOpenCL = false;
+bool have_gl_sharing = false;
+bool have_egl_image = false;
 
 void initCL()
 {
@@ -94,27 +96,40 @@ void initCL()
     if (mEglContext == EGL_NO_CONTEXT)
         LOGE("initCL: eglGetCurrentContext() returned 'EGL_NO_CONTEXT', error = %x", eglGetError());
 
-    cl_context_properties props[] =
-    {   CL_GL_CONTEXT_KHR,   (cl_context_properties) mEglContext,
-        CL_EGL_DISPLAY_KHR,  (cl_context_properties) mEglDisplay,
-        CL_CONTEXT_PLATFORM, 0,
-        0 };
-
     try
     {
         haveOpenCL = false;
         cl::Platform p = cl::Platform::getDefault();
         std::string ext = p.getInfo<CL_PLATFORM_EXTENSIONS>();
-        if(ext.find("cl_khr_gl_sharing") == std::string::npos)
-            LOGE("Warning: CL-GL sharing isn't supported by PLATFORM");
-        props[5] = (cl_context_properties) p();
+        if(ext.find("cl_khr_gl_sharing") != std::string::npos) have_gl_sharing = true;
+        else LOGE("Warning: CL-GL sharing isn't supported by PLATFORM");
+        if(ext.find("cl_khr_egl_image") != std::string::npos) have_egl_image = true;
+        else LOGE("Warning: CL-EGLImages sharing isn't supported by PLATFORM");
 
-        theContext = cl::Context(CL_DEVICE_TYPE_GPU, props);
+        try
+        {
+            cl_context_properties props[] =
+            {   CL_GL_CONTEXT_KHR,   (cl_context_properties) mEglContext,
+                CL_EGL_DISPLAY_KHR,  (cl_context_properties) mEglDisplay,
+                CL_CONTEXT_PLATFORM, (cl_context_properties) p(),
+                0 };
+            theContext = cl::Context(CL_DEVICE_TYPE_GPU, props);
+        }
+        catch(cl::Error& e)
+        {
+            LOGE( "Error creating shared CL context (%d, %s). Trying without CL-GL sharing...",
+                  e.err(), e.what() );
+            theContext = cl::Context(CL_DEVICE_TYPE_GPU);
+        }
         std::vector<cl::Device> devs = theContext.getInfo<CL_CONTEXT_DEVICES>();
         LOGD("Context returned %d devices, taking the 1st one", devs.size());
         ext = devs[0].getInfo<CL_DEVICE_EXTENSIONS>();
-        if(ext.find("cl_khr_gl_sharing") == std::string::npos)
-            LOGE("Warning: CL-GL sharing isn't supported by DEVICE");
+        if(ext.find("cl_khr_gl_sharing") != std::string::npos) have_gl_sharing = true;
+        else LOGE("Warning: CL-GL sharing isn't supported by DEVICE");
+        if(ext.find("cl_khr_egl_image") == std::string::npos) have_egl_image = true;
+        else LOGE("Warning: CL-EGLImages sharing isn't supported by DEVICE");
+
+        LOGD("gl_sharing: %s, egl_image = %s", (have_gl_sharing ? "yes" : "no"), (have_egl_image ? "yes" : "no"));
 
         theQueue = cl::CommandQueue(theContext, devs[0]);
 
@@ -139,7 +154,7 @@ void initCL()
     }
     catch(...)
     {
-        LOGE( "OpenCL info: unknown error while initializing OpenCL stuff" );
+        LOGE( "initCL: unknown error while initializing OpenCL stuff" );
     }
     LOGD("initCL completed");
 }
@@ -149,53 +164,64 @@ void closeCL()
 }
 
 #define GL_TEXTURE_2D 0x0DE1
+
 void procOCL_I2I(int texIn, int texOut, int w, int h)
 {
-    if(!haveOpenCL) return;
+    if(!haveOpenCL || (!have_gl_sharing /*&& !have_egl_image*/)) return;
 
     LOGD("procOCL_I2I(%d, %d, %d, %d)", texIn, texOut, w, h);
-    cl::ImageGL imgIn (theContext, CL_MEM_READ_ONLY,  GL_TEXTURE_2D, 0, texIn);
-    cl::ImageGL imgOut(theContext, CL_MEM_WRITE_ONLY, GL_TEXTURE_2D, 0, texOut);
+
+    int64_t t;
     std::vector < cl::Memory > images;
-    images.push_back(imgIn);
-    images.push_back(imgOut);
-
-    int64_t t = getTimeMs();
-    theQueue.enqueueAcquireGLObjects(&images);
-    theQueue.finish();
-    LOGD("enqueueAcquireGLObjects() costs %d ms", getTimeInterval(t));
-
-    t = getTimeMs();
     cl::Kernel Laplacian(theProgI2I, "Laplacian"); //TODO: may be done once
-    Laplacian.setArg(0, imgIn);
-    Laplacian.setArg(1, imgOut);
-    theQueue.finish();
-    LOGD("Kernel() costs %d ms", getTimeInterval(t));
+
+    if(have_gl_sharing)
+    {
+        LOGD("using gl_sharing");
+        cl::ImageGL imgIn(theContext, CL_MEM_READ_ONLY,  GL_TEXTURE_2D, 0, texIn);
+        cl::ImageGL imgOut(theContext, CL_MEM_WRITE_ONLY, GL_TEXTURE_2D, 0, texOut);
+        images.push_back(imgIn);
+        images.push_back(imgOut);
+        t = getTimeMs();
+        theQueue.enqueueAcquireGLObjects(&images);
+        theQueue.finish();
+        LOGD("enqueueAcquireGLObjects() costs %d ms", getTimeInterval(t));
+        Laplacian.setArg(0, imgIn);
+        Laplacian.setArg(1, imgOut);
+    }
 
     t = getTimeMs();
     theQueue.enqueueNDRangeKernel(Laplacian, cl::NullRange, cl::NDRange(w, h), cl::NullRange);
     theQueue.finish();
     LOGD("enqueueNDRangeKernel() costs %d ms", getTimeInterval(t));
 
-    t = getTimeMs();
-    theQueue.enqueueReleaseGLObjects(&images);
-    theQueue.finish();
-    LOGD("enqueueReleaseGLObjects() costs %d ms", getTimeInterval(t));
+    if(have_gl_sharing)
+    {
+        t = getTimeMs();
+        theQueue.enqueueReleaseGLObjects(&images);
+        theQueue.finish();
+        LOGD("enqueueReleaseGLObjects() costs %d ms", getTimeInterval(t));
+    }
 }
 
 void procOCL_OCV(int texIn, int texOut, int w, int h)
 {
-    if(!haveOpenCL) return;
+    if(!haveOpenCL || !cv::ocl::useOpenCL() || (!have_gl_sharing /*&& !have_egl_image*/)) return;
 
-    int64_t t = getTimeMs();
-    cl::ImageGL imgIn (theContext, CL_MEM_READ_ONLY,  GL_TEXTURE_2D, 0, texIn);
-    std::vector < cl::Memory > images(1, imgIn);
-    theQueue.enqueueAcquireGLObjects(&images);
-    theQueue.finish();
     cv::UMat uIn, uOut, uTmp;
-    cv::ocl::convertFromImage(imgIn(), uIn);
-    LOGD("loading texture data to OpenCV UMat costs %d ms", getTimeInterval(t));
-    theQueue.enqueueReleaseGLObjects(&images);
+    std::vector < cl::Memory > images;
+    int64_t t;
+    if(have_gl_sharing)
+    {
+        t = getTimeMs();
+        cl::ImageGL imgIn (theContext, CL_MEM_READ_ONLY,  GL_TEXTURE_2D, 0, texIn);
+        images.push_back(imgIn);
+        theQueue.enqueueAcquireGLObjects(&images);
+        theQueue.finish();
+        cv::ocl::convertFromImage(imgIn(), uIn);
+        LOGD("loading texture data to OpenCV UMat costs %d ms", getTimeInterval(t));
+        theQueue.enqueueReleaseGLObjects(&images);
+    }
 
     t = getTimeMs();
     //cv::blur(uIn, uOut, cv::Size(5, 5));
@@ -204,18 +230,21 @@ void procOCL_OCV(int texIn, int texOut, int w, int h)
     cv::ocl::finish();
     LOGD("OpenCV processing costs %d ms", getTimeInterval(t));
 
-    t = getTimeMs();
-    cl::ImageGL imgOut(theContext, CL_MEM_WRITE_ONLY, GL_TEXTURE_2D, 0, texOut);
-    images.clear();
-    images.push_back(imgOut);
-    theQueue.enqueueAcquireGLObjects(&images);
-    cl_mem clBuffer = (cl_mem)uOut.handle(cv::ACCESS_READ);
-    cl_command_queue q = (cl_command_queue)cv::ocl::Queue::getDefault().ptr();
-    size_t offset = 0;
-    size_t origin[3] = { 0, 0, 0 };
-    size_t region[3] = { w, h, 1 };
-    CV_Assert(clEnqueueCopyBufferToImage (q, clBuffer, imgOut(), offset, origin, region, 0, NULL, NULL) == CL_SUCCESS);
-    theQueue.enqueueReleaseGLObjects(&images);
-    cv::ocl::finish();
-    LOGD("uploading results to texture costs %d ms", getTimeInterval(t));
+    if(have_gl_sharing)
+    {
+        t = getTimeMs();
+        cl::ImageGL imgOut(theContext, CL_MEM_WRITE_ONLY, GL_TEXTURE_2D, 0, texOut);
+        images.clear();
+        images.push_back(imgOut);
+        theQueue.enqueueAcquireGLObjects(&images);
+        cl_mem clBuffer = (cl_mem)uOut.handle(cv::ACCESS_READ);
+        cl_command_queue q = (cl_command_queue)cv::ocl::Queue::getDefault().ptr();
+        size_t offset = 0;
+        size_t origin[3] = { 0, 0, 0 };
+        size_t region[3] = { w, h, 1 };
+        CV_Assert(clEnqueueCopyBufferToImage (q, clBuffer, imgOut(), offset, origin, region, 0, NULL, NULL) == CL_SUCCESS);
+        theQueue.enqueueReleaseGLObjects(&images);
+        cv::ocl::finish();
+        LOGD("uploading results to texture costs %d ms", getTimeInterval(t));
+    }
 }
