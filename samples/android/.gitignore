@@ -1,5 +1,8 @@
+.settings/
 bin/
 gen/
+libs/
+obj/
 build.xml
 local.properties
 proguard-project.txt
