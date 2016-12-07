@@ -933,6 +933,71 @@ public:
     { IVX_CHECK_STATUS(vxWaitGraph(ref)); }
 };
 
+/// vx_parameter wrapper
+class Param : public RefWrapper<vx_parameter>
+{
+public:
+    IVX_REF_STD_CTORS_AND_ASSIGNMENT(Param);
+
+    /// vxSetParameterByReference() wrapper
+    void setValue(vx_reference value)
+    { IVX_CHECK_STATUS( vxSetParameterByReference(ref, value) ); }
+
+    /// vxQueryParameter() wrapper
+    template<typename T>
+    void query(vx_enum att, T& val) const
+    { IVX_CHECK_STATUS( vxQueryParameter(ref, att, &val, sizeof(val)) ); }
+
+#ifndef VX_VERSION_1_1
+    static const vx_enum
+        VX_PARAMETER_INDEX      = VX_PARAMETER_ATTRIBUTE_INDEX,
+        VX_PARAMETER_DIRECTION  = VX_PARAMETER_ATTRIBUTE_DIRECTION,
+        VX_PARAMETER_TYPE       = VX_PARAMETER_ATTRIBUTE_TYPE,
+        VX_PARAMETER_STATE      = VX_PARAMETER_ATTRIBUTE_STATE,
+        VX_PARAMETER_REF        = VX_PARAMETER_ATTRIBUTE_REF;
+#endif
+
+    /// vxQueryParameter(INDEX) wrapper
+    vx_uint32 index() const
+    {
+        vx_uint32 val;
+        query(VX_PARAMETER_INDEX, val);
+        return val;
+    }
+
+    /// vxQueryParameter(DIRECTION) wrapper
+    vx_enum direction() const
+    {
+        vx_enum val;
+        query(VX_PARAMETER_DIRECTION, val);
+        return val;
+    }
+
+    /// vxQueryParameter(TYPE) wrapper
+    vx_type_e type() const
+    {
+        vx_type_e val;
+        query(VX_PARAMETER_TYPE, val);
+        return val;
+    }
+
+    /// vxQueryParameter(STATE) wrapper
+    vx_parameter_state_e state() const
+    {
+        vx_parameter_state_e val;
+        query(VX_PARAMETER_STATE, val);
+        return val;
+    }
+
+    /// vxQueryParameter(REF) wrapper
+    vx_reference reference() const
+    {
+        vx_reference val;
+        query(VX_PARAMETER_REF, val);
+        return val;
+    }
+};
+
 /// vx_kernel wrapper
 class Kernel : public RefWrapper<vx_kernel>
 {
@@ -946,6 +1011,10 @@ public:
     /// vxGetKernelByName() wrapper
     static Kernel getByName(vx_context c, const std::string& name)
     { return Kernel(vxGetKernelByName(c, name.c_str())); }
+
+    /// vxGetKernelParameterByIndex() wrapper
+    Param getParam(vx_uint32 index)
+    { return Param( vxGetKernelParameterByIndex(ref, index) ); }
 };
 
 
@@ -965,7 +1034,7 @@ public:
         Node node = Node::create(graph, kernel);
         vx_uint32 i = 0;
         for (std::vector<vx_reference>::const_iterator p = params.begin(); p != params.end(); ++p)
-            node.setParameterByIndex(i++, *p);
+            node.setParam(i++, *p);
         return node;
     }
 
@@ -1145,8 +1214,12 @@ public:
 #endif // IVX_USE_CXX98
 
     /// vxSetParameterByIndex() wrapper
-    void setParameterByIndex(vx_uint32 index, vx_reference value)
+    void setParam(vx_uint32 index, vx_reference value)
     { IVX_CHECK_STATUS(vxSetParameterByIndex(ref, index, value)); }
+
+    ///vxGetParameterByIndex
+    Param getParam(vx_uint32 index)
+    { return Param( vxGetParameterByIndex(ref, index) ); }
 
     /// vxQueryNode() wrapper
     template<typename T>
@@ -1868,13 +1941,6 @@ private:
 #endif
 };
 
-/// vx_parameter wrapper
-class Param : public RefWrapper<vx_parameter>
-{
-public:
-    IVX_REF_STD_CTORS_AND_ASSIGNMENT(Param);
-    // NYI
-};
 
 /// vx_scalar wrapper
 class Scalar : public RefWrapper<vx_scalar>
