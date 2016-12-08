@@ -414,6 +414,12 @@ public:
     explicit RefWrapper(T r, bool retainRef = false) : ref(0), refcount(0)
     { reset(r, retainRef); }
 
+    /// Constructor
+    /// \param r vx_reference keeping the OpenVX 'object' of the 'vxType' type
+    /// \param retainRef flag indicating whether to increase ref counter in constructor (false by default)
+    explicit RefWrapper(vx_reference r, bool retainRef = false) : ref(0), refcount(0)
+    { reset(r, retainRef); }
+
     /// Copy constructor
     RefWrapper(const RefWrapper& r) : ref(r.ref), refcount(r.refcount)
     { addRef(); }
@@ -451,6 +457,23 @@ public:
 #endif
         checkRef();
     }
+
+    /// Assigning a new value (decreasing ref counter for the old one)
+    /// \param r vx_reference keeping the OpenVX 'object' of the 'vxType' type
+    /// \param retainRef flag indicating whether to increase ref counter in constructor (false by default)
+    void reset(vx_reference r, bool retainRef = false)
+    {
+        release();
+        ref = (vxType)r;
+#ifdef VX_VERSION_1_1
+        if(retainRef) addRef();
+#else
+        // if 'retainRef' -just don't use ref-counting for v 1.0
+        if(!retainRef) refcount = new int(1);
+#endif
+        checkRef();
+    }
+
 
     /// Assigning an empty value (decreasing ref counter for the old one)
     void reset()
@@ -551,6 +574,7 @@ protected:
     #define IVX_REF_STD_CTORS_AND_ASSIGNMENT(Class) \
         Class() : RefWrapper() {} \
         explicit Class(Class::vxType _ref, bool retainRef = false) : RefWrapper(_ref, retainRef) {} \
+        explicit Class(vx_reference  _ref, bool retainRef = false) : RefWrapper(_ref, retainRef) {} \
         Class(const Class& _obj) : RefWrapper(_obj) {} \
         \
         Class& operator=(Class _obj) { using std::swap; swap(ref, _obj.ref); swap(refcount, _obj.refcount); return *this; }
@@ -560,6 +584,7 @@ protected:
     #define IVX_REF_STD_CTORS_AND_ASSIGNMENT(Class) \
         Class() : RefWrapper() {} \
         explicit Class(Class::vxType _ref, bool retainRef = false) : RefWrapper(_ref, retainRef) {} \
+        explicit Class(vx_reference  _ref, bool retainRef = false) : RefWrapper(_ref, retainRef) {} \
         Class(const Class& _obj) : RefWrapper(_obj) {} \
         Class(Class&& _obj) : RefWrapper(std::move(_obj)) {} \
         \
@@ -584,6 +609,12 @@ public:
     /// \param r OpenVX 'object' (e.g. vx_image)
     /// \param retainRef flag indicating whether to increase ref counter in constructor (false by default)
     explicit RefWrapper(T r, bool retainRef = false) : ref(0)
+    { reset(r, retainRef); }
+
+    /// Constructor
+    /// \param r vx_reference keeping the OpenVX 'object' of the 'vxType' type
+    /// \param retainRef flag indicating whether to increase ref counter in constructor (false by default)
+    explicit RefWrapper(vx_reference r, bool retainRef = false) : ref(0)
     { reset(r, retainRef); }
 
     /// Copy constructor
@@ -635,6 +666,17 @@ public:
     {
         release();
         ref = r;
+        if (retainRef) addRef();
+        checkRef();
+    }
+
+    /// Assigning a new value (decreasing ref counter for the old one)
+    /// \param r vx_reference keeping the OpenVX 'object' of the 'vxType' type
+    /// \param retainRef flag indicating whether to increase ref counter in constructor (false by default)
+    void reset(vx_reference r, bool retainRef = false)
+    {
+        release();
+        ref = (vxType)r;
         if (retainRef) addRef();
         checkRef();
     }
@@ -699,6 +741,7 @@ protected:
     #define IVX_REF_STD_CTORS_AND_ASSIGNMENT(Class) \
         Class() : RefWrapper() {} \
         explicit Class(Class::vxType _ref, bool retainRef = false) : RefWrapper(_ref, retainRef) {} \
+        explicit Class(vx_reference  _ref, bool retainRef = false) : RefWrapper(_ref, retainRef) {} \
         Class(const Class& _obj) : RefWrapper(_obj) {} \
         \
         Class& operator=(Class _obj) { using std::swap; swap(ref, _obj.ref); return *this; }
@@ -708,6 +751,7 @@ protected:
     #define IVX_REF_STD_CTORS_AND_ASSIGNMENT(Class) \
         Class() : RefWrapper() {} \
         explicit Class(Class::vxType _ref, bool retainRef = false) : RefWrapper(_ref, retainRef) {} \
+        explicit Class(vx_reference  _ref, bool retainRef = false) : RefWrapper(_ref, retainRef) {} \
         Class(const Class& _obj) : RefWrapper(_obj) {} \
         Class(Class&& _obj) : RefWrapper(std::move(_obj)) {} \
         \
@@ -722,6 +766,78 @@ typedef vx_border_mode_t border_t;
 #else
 typedef vx_border_t border_t;
 #endif
+
+enum Compat_1_1
+#ifndef IVX_USE_CXX98
+: vx_enum
+#endif
+{
+    VX_MEMORY_TYPE_HOST = VX_IMPORT_TYPE_HOST,
+
+    VX_CONTEXT_VENDOR_ID                            = VX_CONTEXT_ATTRIBUTE_VENDOR_ID,
+    VX_CONTEXT_VERSION                              = VX_CONTEXT_ATTRIBUTE_VERSION,
+    VX_CONTEXT_UNIQUE_KERNELS                       = VX_CONTEXT_ATTRIBUTE_UNIQUE_KERNELS,
+    VX_CONTEXT_MODULES                              = VX_CONTEXT_ATTRIBUTE_MODULES,
+    VX_CONTEXT_REFERENCES                           = VX_CONTEXT_ATTRIBUTE_REFERENCES,
+    VX_CONTEXT_IMPLEMENTATION                       = VX_CONTEXT_ATTRIBUTE_IMPLEMENTATION,
+    VX_CONTEXT_EXTENSIONS_SIZE                      = VX_CONTEXT_ATTRIBUTE_EXTENSIONS_SIZE,
+    VX_CONTEXT_EXTENSIONS                           = VX_CONTEXT_ATTRIBUTE_EXTENSIONS,
+    VX_CONTEXT_CONVOLUTION_MAX_DIMENSION            = VX_CONTEXT_ATTRIBUTE_CONVOLUTION_MAXIMUM_DIMENSION,
+    VX_CONTEXT_OPTICAL_FLOW_MAX_WINDOW_DIMENSION    = VX_CONTEXT_ATTRIBUTE_OPTICAL_FLOW_WINDOW_MAXIMUM_DIMENSION,
+    VX_CONTEXT_IMMEDIATE_BORDER                     = VX_CONTEXT_ATTRIBUTE_IMMEDIATE_BORDER_MODE,
+    VX_CONTEXT_UNIQUE_KERNEL_TABLE                  = VX_CONTEXT_ATTRIBUTE_UNIQUE_KERNEL_TABLE,
+
+    VX_PARAMETER_INDEX      = VX_PARAMETER_ATTRIBUTE_INDEX,
+    VX_PARAMETER_DIRECTION  = VX_PARAMETER_ATTRIBUTE_DIRECTION,
+    VX_PARAMETER_TYPE       = VX_PARAMETER_ATTRIBUTE_TYPE,
+    VX_PARAMETER_STATE      = VX_PARAMETER_ATTRIBUTE_STATE,
+    VX_PARAMETER_REF        = VX_PARAMETER_ATTRIBUTE_REF,
+
+    VX_NODE_STATUS          = VX_NODE_ATTRIBUTE_STATUS,
+    VX_NODE_PERFORMANCE     = VX_NODE_ATTRIBUTE_PERFORMANCE,
+    VX_NODE_BORDER          = VX_NODE_ATTRIBUTE_BORDER_MODE,
+    VX_NODE_LOCAL_DATA_SIZE = VX_NODE_ATTRIBUTE_LOCAL_DATA_SIZE,
+    VX_NODE_LOCAL_DATA_PTR  = VX_NODE_ATTRIBUTE_LOCAL_DATA_PTR,
+    VX_BORDER_UNDEFINED     = VX_BORDER_MODE_UNDEFINED,
+
+    VX_IMAGE_WIDTH  = VX_IMAGE_ATTRIBUTE_WIDTH,
+    VX_IMAGE_HEIGHT = VX_IMAGE_ATTRIBUTE_HEIGHT,
+    VX_IMAGE_FORMAT = VX_IMAGE_ATTRIBUTE_FORMAT,
+    VX_IMAGE_PLANES = VX_IMAGE_ATTRIBUTE_PLANES,
+    VX_IMAGE_SPACE  = VX_IMAGE_ATTRIBUTE_SPACE,
+    VX_IMAGE_RANGE  = VX_IMAGE_ATTRIBUTE_RANGE,
+    VX_IMAGE_SIZE   = VX_IMAGE_ATTRIBUTE_SIZE,
+
+    VX_SCALAR_TYPE = VX_SCALAR_ATTRIBUTE_TYPE,
+
+    VX_THRESHOLD_TYPE            = VX_THRESHOLD_ATTRIBUTE_TYPE,
+    VX_THRESHOLD_THRESHOLD_VALUE = VX_THRESHOLD_ATTRIBUTE_THRESHOLD_VALUE,
+    VX_THRESHOLD_THRESHOLD_LOWER = VX_THRESHOLD_ATTRIBUTE_THRESHOLD_LOWER,
+    VX_THRESHOLD_THRESHOLD_UPPER = VX_THRESHOLD_ATTRIBUTE_THRESHOLD_UPPER,
+    VX_THRESHOLD_TRUE_VALUE      = VX_THRESHOLD_ATTRIBUTE_TRUE_VALUE,
+    VX_THRESHOLD_FALSE_VALUE     = VX_THRESHOLD_ATTRIBUTE_FALSE_VALUE,
+    VX_THRESHOLD_DATA_TYPE       = VX_THRESHOLD_ATTRIBUTE_DATA_TYPE,
+
+    VX_ARRAY_ITEMTYPE   = VX_ARRAY_ATTRIBUTE_ITEMTYPE,
+    VX_ARRAY_NUMITEMS   = VX_ARRAY_ATTRIBUTE_NUMITEMS,
+    VX_ARRAY_CAPACITY   = VX_ARRAY_ATTRIBUTE_CAPACITY,
+    VX_ARRAY_ITEMSIZE   = VX_ARRAY_ATTRIBUTE_ITEMSIZE,
+
+    VX_CONVOLUTION_ROWS    = VX_CONVOLUTION_ATTRIBUTE_ROWS,
+    VX_CONVOLUTION_COLUMNS = VX_CONVOLUTION_ATTRIBUTE_COLUMNS,
+    VX_CONVOLUTION_SCALE   = VX_CONVOLUTION_ATTRIBUTE_SCALE,
+    VX_CONVOLUTION_SIZE    = VX_CONVOLUTION_ATTRIBUTE_SIZE,
+
+    VX_MATRIX_TYPE      = VX_MATRIX_ATTRIBUTE_TYPE,
+    VX_MATRIX_ROWS      = VX_MATRIX_ATTRIBUTE_ROWS,
+    VX_MATRIX_COLUMNS   = VX_MATRIX_ATTRIBUTE_COLUMNS,
+    VX_MATRIX_SIZE      = VX_MATRIX_ATTRIBUTE_SIZE,
+
+    VX_LUT_TYPE     = VX_LUT_ATTRIBUTE_TYPE,
+    VX_LUT_COUNT    = VX_LUT_ATTRIBUTE_COUNT,
+    VX_LUT_SIZE     = VX_LUT_ATTRIBUTE_SIZE,
+};
+
 
 /// vx_context wrapper
 class Context : public RefWrapper<vx_context>
@@ -751,22 +867,6 @@ public:
     template<typename T>
     void query(vx_enum att, T& value) const
     { IVX_CHECK_STATUS(vxQueryContext(ref, att, &value, sizeof(value))); }
-
-#ifndef VX_VERSION_1_1
-    static const vx_enum
-        VX_CONTEXT_VENDOR_ID = VX_CONTEXT_ATTRIBUTE_VENDOR_ID,
-        VX_CONTEXT_VERSION = VX_CONTEXT_ATTRIBUTE_VERSION,
-        VX_CONTEXT_UNIQUE_KERNELS = VX_CONTEXT_ATTRIBUTE_UNIQUE_KERNELS,
-        VX_CONTEXT_MODULES = VX_CONTEXT_ATTRIBUTE_MODULES,
-        VX_CONTEXT_REFERENCES = VX_CONTEXT_ATTRIBUTE_REFERENCES,
-        VX_CONTEXT_IMPLEMENTATION = VX_CONTEXT_ATTRIBUTE_IMPLEMENTATION,
-        VX_CONTEXT_EXTENSIONS_SIZE = VX_CONTEXT_ATTRIBUTE_EXTENSIONS_SIZE,
-        VX_CONTEXT_EXTENSIONS = VX_CONTEXT_ATTRIBUTE_EXTENSIONS,
-        VX_CONTEXT_CONVOLUTION_MAX_DIMENSION = VX_CONTEXT_ATTRIBUTE_CONVOLUTION_MAXIMUM_DIMENSION,
-        VX_CONTEXT_OPTICAL_FLOW_MAX_WINDOW_DIMENSION = VX_CONTEXT_ATTRIBUTE_OPTICAL_FLOW_WINDOW_MAXIMUM_DIMENSION,
-        VX_CONTEXT_IMMEDIATE_BORDER = VX_CONTEXT_ATTRIBUTE_IMMEDIATE_BORDER_MODE,
-        VX_CONTEXT_UNIQUE_KERNEL_TABLE = VX_CONTEXT_ATTRIBUTE_UNIQUE_KERNEL_TABLE;
-#endif
 
     /// vxQueryContext(VX_CONTEXT_VENDOR_ID) wrapper
     vx_uint16 vendorID() const
@@ -947,15 +1047,6 @@ public:
     template<typename T>
     void query(vx_enum att, T& val) const
     { IVX_CHECK_STATUS( vxQueryParameter(ref, att, &val, sizeof(val)) ); }
-
-#ifndef VX_VERSION_1_1
-    static const vx_enum
-        VX_PARAMETER_INDEX      = VX_PARAMETER_ATTRIBUTE_INDEX,
-        VX_PARAMETER_DIRECTION  = VX_PARAMETER_ATTRIBUTE_DIRECTION,
-        VX_PARAMETER_TYPE       = VX_PARAMETER_ATTRIBUTE_TYPE,
-        VX_PARAMETER_STATE      = VX_PARAMETER_ATTRIBUTE_STATE,
-        VX_PARAMETER_REF        = VX_PARAMETER_ATTRIBUTE_REF;
-#endif
 
     /// vxQueryParameter(INDEX) wrapper
     vx_uint32 index() const
@@ -1226,16 +1317,6 @@ public:
     void query(vx_enum att, T& value) const
     { IVX_CHECK_STATUS( vxQueryNode(ref, att, &value, sizeof(value)) ); }
 
-#ifndef VX_VERSION_1_1
-static const vx_enum
-    VX_NODE_STATUS          = VX_NODE_ATTRIBUTE_STATUS,
-    VX_NODE_PERFORMANCE     = VX_NODE_ATTRIBUTE_PERFORMANCE,
-    VX_NODE_BORDER          = VX_NODE_ATTRIBUTE_BORDER_MODE,
-    VX_NODE_LOCAL_DATA_SIZE = VX_NODE_ATTRIBUTE_LOCAL_DATA_SIZE,
-    VX_NODE_LOCAL_DATA_PTR  = VX_NODE_ATTRIBUTE_LOCAL_DATA_PTR,
-    VX_BORDER_UNDEFINED     = VX_BORDER_MODE_UNDEFINED;
-#endif
-
     /// vxQueryNode(STATUS) wrapper
     vx_status status() const
     {
@@ -1427,9 +1508,6 @@ public:
         return ipa;
     }
 
-#ifndef VX_VERSION_1_1
-    static const vx_enum VX_MEMORY_TYPE_HOST = VX_IMPORT_TYPE_HOST;
-#endif
     /// vxCreateImageFromHandle() wrapper
     static Image createFromHandle(
             vx_context context, vx_df_image format,
@@ -1500,17 +1578,6 @@ public:
     template<typename T>
     void query(vx_enum att, T& value) const
     { IVX_CHECK_STATUS( vxQueryImage(ref, att, &value, sizeof(value)) ); }
-
-#ifndef VX_VERSION_1_1
-static const vx_enum
-    VX_IMAGE_WIDTH  = VX_IMAGE_ATTRIBUTE_WIDTH,
-    VX_IMAGE_HEIGHT = VX_IMAGE_ATTRIBUTE_HEIGHT,
-    VX_IMAGE_FORMAT = VX_IMAGE_ATTRIBUTE_FORMAT,
-    VX_IMAGE_PLANES = VX_IMAGE_ATTRIBUTE_PLANES,
-    VX_IMAGE_SPACE  = VX_IMAGE_ATTRIBUTE_SPACE,
-    VX_IMAGE_RANGE  = VX_IMAGE_ATTRIBUTE_RANGE,
-    VX_IMAGE_SIZE   = VX_IMAGE_ATTRIBUTE_SIZE;
-#endif
 
     /// vxQueryImage(VX_IMAGE_WIDTH) wrapper
     vx_uint32 width() const
@@ -1963,9 +2030,6 @@ public:
     template<vx_enum E> static Scalar create(vx_context c, typename EnumToType<E>::type value)
     { return Scalar( vxCreateScalar(c, E, &value) ); }
 
-#ifndef VX_VERSION_1_1
-static const vx_enum VX_SCALAR_TYPE = VX_SCALAR_ATTRIBUTE_TYPE;
-#endif
     /// Get scalar data type
     vx_enum type()
     {
@@ -2020,18 +2084,6 @@ public:
     /// vxCreateThreshold() wrapper
     static Threshold create(vx_context c, vx_enum threshType, vx_enum dataType)
     { return Threshold(vxCreateThreshold(c, threshType, dataType)); }
-
-#ifndef VX_VERSION_1_1
-static const vx_enum
-    VX_THRESHOLD_TYPE            = VX_THRESHOLD_ATTRIBUTE_TYPE,
-    VX_THRESHOLD_THRESHOLD_VALUE = VX_THRESHOLD_ATTRIBUTE_THRESHOLD_VALUE,
-    VX_THRESHOLD_THRESHOLD_LOWER = VX_THRESHOLD_ATTRIBUTE_THRESHOLD_LOWER,
-    VX_THRESHOLD_THRESHOLD_UPPER = VX_THRESHOLD_ATTRIBUTE_THRESHOLD_UPPER,
-    VX_THRESHOLD_TRUE_VALUE      = VX_THRESHOLD_ATTRIBUTE_TRUE_VALUE,
-    VX_THRESHOLD_FALSE_VALUE     = VX_THRESHOLD_ATTRIBUTE_FALSE_VALUE,
-    VX_THRESHOLD_DATA_TYPE       = VX_THRESHOLD_ATTRIBUTE_DATA_TYPE;
-#endif
-
 
     /// Create binary threshold with the provided value
     static Threshold createBinary(vx_context c, vx_enum dataType, vx_int32 val)
@@ -2145,15 +2197,6 @@ public:
     /// vxCreateVirtualArray() wrapper
     static Array createVirtual(vx_graph g, vx_enum type, vx_size capacity)
     { return Array(vxCreateVirtualArray(g, type, capacity)); }
-
-#ifndef VX_VERSION_1_1
-    static const vx_enum
-        VX_MEMORY_TYPE_HOST = VX_IMPORT_TYPE_HOST,
-        VX_ARRAY_ITEMTYPE   = VX_ARRAY_ATTRIBUTE_ITEMTYPE,
-        VX_ARRAY_NUMITEMS   = VX_ARRAY_ATTRIBUTE_NUMITEMS,
-        VX_ARRAY_CAPACITY   = VX_ARRAY_ATTRIBUTE_CAPACITY,
-        VX_ARRAY_ITEMSIZE   = VX_ARRAY_ATTRIBUTE_ITEMSIZE;
-#endif
 
     template<typename T>
     void query(vx_enum att, T& value) const
@@ -2345,15 +2388,6 @@ public:
     static Convolution create(vx_context context, vx_size columns, vx_size rows)
     { return Convolution(vxCreateConvolution(context, columns, rows)); }
 
-#ifndef VX_VERSION_1_1
-    static const vx_enum
-        VX_MEMORY_TYPE_HOST    = VX_IMPORT_TYPE_HOST,
-        VX_CONVOLUTION_ROWS    = VX_CONVOLUTION_ATTRIBUTE_ROWS,
-        VX_CONVOLUTION_COLUMNS = VX_CONVOLUTION_ATTRIBUTE_COLUMNS,
-        VX_CONVOLUTION_SCALE   = VX_CONVOLUTION_ATTRIBUTE_SCALE,
-        VX_CONVOLUTION_SIZE    = VX_CONVOLUTION_ATTRIBUTE_SIZE;
-#endif
-
     template<typename T>
     void query(vx_enum att, T& value) const
     { IVX_CHECK_STATUS( vxQueryConvolution(ref, att, &value, sizeof(value)) ); }
@@ -2497,15 +2531,6 @@ public:
 #ifdef VX_VERSION_1_1
     static Matrix createFromPattern(vx_context context, vx_enum pattern, vx_size columns, vx_size rows)
     { return Matrix(vxCreateMatrixFromPattern(context, pattern, columns, rows)); }
-#endif
-
-#ifndef VX_VERSION_1_1
-    static const vx_enum
-        VX_MEMORY_TYPE_HOST = VX_IMPORT_TYPE_HOST,
-        VX_MATRIX_TYPE      = VX_MATRIX_ATTRIBUTE_TYPE,
-        VX_MATRIX_ROWS      = VX_MATRIX_ATTRIBUTE_ROWS,
-        VX_MATRIX_COLUMNS   = VX_MATRIX_ATTRIBUTE_COLUMNS,
-        VX_MATRIX_SIZE      = VX_MATRIX_ATTRIBUTE_SIZE;
 #endif
 
     template<typename T>
@@ -2665,22 +2690,11 @@ public:
         return LUT(vxCreateLUT(context, dataType, count));
     }
 
-#ifndef VX_VERSION_1_1
-    static const vx_enum VX_MEMORY_TYPE_HOST = VX_IMPORT_TYPE_HOST;
-#endif
-
     template<typename T>
     void query(vx_enum att, T& value) const
     {
         IVX_CHECK_STATUS(vxQueryLUT(ref, att, &value, sizeof(value)));
     }
-
-#ifndef VX_VERSION_1_1
-    static const vx_enum
-        VX_LUT_TYPE = VX_LUT_ATTRIBUTE_TYPE,
-        VX_LUT_COUNT = VX_LUT_ATTRIBUTE_COUNT,
-        VX_LUT_SIZE = VX_LUT_ATTRIBUTE_SIZE;
-#endif
 
     vx_enum dataType() const
     {
