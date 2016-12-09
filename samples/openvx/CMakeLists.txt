@@ -9,6 +9,7 @@ if(BUILD_EXAMPLES AND OCV_DEPENDENCIES_FOUND)
   set(name_wrapped "interop")
   set(name_orig "interop_orig")
   set(name_video "interop_video")
+  set(name_user_node "user_node")
 
   project("${group}_sample")
 
@@ -20,6 +21,7 @@ if(BUILD_EXAMPLES AND OCV_DEPENDENCIES_FOUND)
   file(GLOB srcs_wrapped wrappers.cpp *.hpp)
   file(GLOB srcs_orig  no_wrappers.cpp *.hpp)
   file(GLOB srcs_video wrappers_video.cpp *.hpp)
+  file(GLOB srcs_user_node user_node.cpp)
 
   MACRO(OPENVX_DEFINE_SAMPLE name srcs)
     set(target "example_${group}_${name}")
@@ -33,5 +35,6 @@ if(BUILD_EXAMPLES AND OCV_DEPENDENCIES_FOUND)
   OPENVX_DEFINE_SAMPLE(${name_wrapped} ${srcs_wrapped})
   OPENVX_DEFINE_SAMPLE(${name_orig} ${srcs_orig})
   OPENVX_DEFINE_SAMPLE(${name_video} ${srcs_video})
+  OPENVX_DEFINE_SAMPLE(${name_user_node} ${srcs_user_node})
 
 endif()

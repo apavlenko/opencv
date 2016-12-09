@@ -343,6 +343,15 @@ template <> struct RefTypeTraits <vx_lut>
     static vx_status release(vxType& ref) { return vxReleaseLUT(&ref); }
 };
 
+class MetaFormat;
+template <> struct RefTypeTraits <vx_meta_format>
+{
+    typedef vx_meta_format vxType;
+    typedef MetaFormat wrapperType;
+    static const vx_enum vxTypeEnum = VX_TYPE_META_FORMAT;
+    static vx_status release(vxType& ref) { return VX_SUCCESS; }
+};
+
 #ifdef IVX_USE_CXX98
 
 /// Casting to vx_reference with compile-time check
@@ -859,10 +868,6 @@ public:
         return Context(c, true);
     }
 
-    /// vxLoadKernels() wrapper
-    void loadKernels(const std::string& module)
-    { IVX_CHECK_STATUS( vxLoadKernels(ref, module.c_str()) ); }
-
     /// vxQueryContext() wrapper
     template<typename T>
     void query(vx_enum att, T& value) const
@@ -991,11 +996,7 @@ public:
     void setImmediateBorder(const border_t& bm)
     { setAttribute(VX_CONTEXT_IMMEDIATE_BORDER, bm); }
 
-#ifndef VX_VERSION_1_1
-    /// vxSetContextAttribute(BORDER) wrapper
-    void setImmediateBorder(vx_enum mode, vx_uint32 val = 0)
-    { border_t bm = {mode, val}; setImmediateBorder(bm); }
-#else
+#ifdef VX_VERSION_1_1
     /// vxSetContextAttribute(BORDER) wrapper
     void setImmediateBorder(vx_enum mode, const vx_pixel_value_t& val)
     { border_t bm = {mode, val}; setImmediateBorder(bm); }
@@ -1003,7 +1004,60 @@ public:
     /// vxSetContextAttribute(BORDER) wrapper
     void setImmediateBorder(vx_enum mode)
     { vx_pixel_value_t val = {}; setImmediateBorder(mode, val); }
+#else
+    /// vxSetContextAttribute(BORDER) wrapper
+    void setImmediateBorder(vx_enum mode, vx_uint32 val = 0)
+    { border_t bm = {mode, val}; setImmediateBorder(bm); }
 #endif
+
+#ifdef VX_VERSION_1_1
+    /// vxAddUserKernel() wrapper
+    Kernel addUserKernel(
+            const std::string& name,
+            vx_enum id,
+            vx_kernel_f func,
+            vx_uint32 paramsNum,
+            vx_kernel_validate_f validate,
+            vx_kernel_initialize_f init = 0,
+            vx_kernel_deinitialize_f deinit = 0
+    )
+    { return Kernel( vxAddUserKernel(ref, name.c_str(), id, func, paramsNum, validate, init, deinit ) ); }
+#else
+    /// vxAddKernel() wrapper
+    Kernel addKernel(
+            const std::string& name,
+            vx_enum id,
+            vx_kernel_f func,
+            vx_uint32 paramsNum,
+            vx_kernel_input_validate_f inVal,
+            vx_kernel_output_validate_f outVal,
+            vx_kernel_initialize_f init = 0,
+            vx_kernel_deinitialize_f deinit = 0
+    )
+    { return Kernel( vxAddKernel(ref, name.c_str(), id, func, paramsNum, inVal, outVal, init, deinit ) ); }
+#endif
+
+    /// vxRemoveKernel() wrapper
+    static void removeKernel(vx_kernel kernel)
+    { IVX_CHECK_STATUS( vxRemoveKernel(kernel) ); }
+
+    /// vxLoadKernels() wrapper
+    void loadKernels(const std::string& module)
+    { IVX_CHECK_STATUS( vxLoadKernels(ref, module.c_str()) ); }
+
+#ifdef VX_VERSION_1_1
+    /// vxUnloadKernels() wrapper
+    void vxUnloadKernels(const std::string& module)
+    { IVX_CHECK_STATUS( vxUnloadKernels(ref, module.c_str()) ); }
+#endif
+
+    /// vxGetKernelByEnum() wrapper
+    Kernel getKernel(vx_enum id)
+    { return Kernel(vxGetKernelByEnum(ref, id)); }
+
+    /// vxGetKernelByName() wrapper
+    Kernel getKernel(const std::string& name)
+    { return Kernel(vxGetKernelByName(ref, name.c_str())); }
 };
 
 /// vx_graph wrapper
@@ -1095,13 +1149,34 @@ class Kernel : public RefWrapper<vx_kernel>
 public:
     IVX_REF_STD_CTORS_AND_ASSIGNMENT(Kernel);
 
-    /// vxGetKernelByEnum() wrapper
-    static Kernel getByEnum(vx_context c, vx_enum kernelID)
-    { return Kernel(vxGetKernelByEnum(c, kernelID)); }
-
-    /// vxGetKernelByName() wrapper
-    static Kernel getByName(vx_context c, const std::string& name)
-    { return Kernel(vxGetKernelByName(c, name.c_str())); }
+#ifdef VX_VERSION_1_1
+    /// vxAddUserKernel() wrapper
+    static Kernel create(
+            vx_context context,
+            const std::string& name,
+            vx_enum id,
+            vx_kernel_f func,
+            vx_uint32 paramsNum,
+            vx_kernel_validate_f validate,
+            vx_kernel_initialize_f init = 0,
+            vx_kernel_deinitialize_f deinit = 0
+    )
+    { return Kernel( vxAddUserKernel(ref, name.c_str(), id, func, paramsNum, validate, init, deinit ) ); }
+#else
+    /// vxAddKernel() wrapper
+    static Kernel create(
+            vx_context context,
+            const std::string& name,
+            vx_enum id,
+            vx_kernel_f func,
+            vx_uint32 paramsNum,
+            vx_kernel_input_validate_f inVal,
+            vx_kernel_output_validate_f outVal,
+            vx_kernel_initialize_f init = 0,
+            vx_kernel_deinitialize_f deinit = 0
+    )
+    { return Kernel( vxAddKernel(ref, name.c_str(), id, func, paramsNum, inVal, outVal, init, deinit ) ); }
+#endif
 
     /// vxGetKernelParameterByIndex() wrapper
     Param getParam(vx_uint32 index)
@@ -2377,9 +2452,7 @@ public:
 #endif //IVX_USE_OPENCV
 };
 
-/*
-* Convolution
-*/
+/// vx_convolution wrapper
 class Convolution : public RefWrapper<vx_convolution>
 {
 public:
@@ -2517,9 +2590,7 @@ public:
 #endif //IVX_USE_OPENCV
 };
 
-/*
-* Matrix
-*/
+/// vx_matrix wrapper
 class Matrix : public RefWrapper<vx_matrix>
 {
 public:
@@ -2670,9 +2741,7 @@ public:
 #endif //IVX_USE_OPENCV
 };
 
-/*
-* LUT
-*/
+/// vx_lut wrapper
 class LUT : public RefWrapper<vx_lut>
 {
 public:
@@ -2818,8 +2887,29 @@ public:
 #endif //IVX_USE_OPENCV
 };
 
+
+/// vx_meta_format wrapper
+class MetaFormat : public RefWrapper<vx_meta_format>
+{
+public:
+    IVX_REF_STD_CTORS_AND_ASSIGNMENT(MetaFormat);
+
+    /// vxSetMetaFormatAttribute wrapper
+    template<typename T>
+    void set(vx_enum att, const T& val)
+    { IVX_CHECK_STATUS( vxSetMetaFormatAttribute(ref, att, &value, sizeof(value)) ); }
+
+#ifdef VX_VERSION_1_1
+    /// vxSetMetaFormatFromReference
+    void setFrom(vx_reference exemplar)
+    { IVX_CHECK_STATUS( vxSetMetaFormatFromReference(ref, exemplar) ); }
+#endif // VX_VERSION_1_1
+};
+
+
 /// Standard nodes
-namespace nodes {
+namespace nodes
+{
 
 /// Creates a Gaussian Filter 3x3 Node (vxGaussian3x3Node)
 inline Node gaussian3x3(vx_graph graph, vx_image inImg, vx_image outImg)
