@@ -37,9 +37,9 @@ Details: TBD
     #endif
 #endif // IVX_USE_CXX98
 
-// let's use this for both 1.0 and 1.1 for some time
+// let's use own ref count for all OpenVX versions
 #define IVX_USE_EXTERNAL_REFCOUNT
-
+/*
 #ifndef IVX_USE_EXTERNAL_REFCOUNT
     // checking OpenVX version
     #ifndef VX_VERSION_1_1
@@ -54,6 +54,7 @@ Details: TBD
         #warning OpenVX version < 1.1, switching to external refcounter implementation.
     #endif
 #endif // IVX_USE_EXTERNAL_REFCOUNT
+*/
 
 #include <stdexcept>
 #include <utility>
@@ -426,8 +427,6 @@ inline void checkVxRef(vx_reference ref, const std::string& func, const std::str
 #define IVX_CHECK_REF(code) checkVxRef(castToReference(code), __func__, #code)
 
 
-#ifdef IVX_USE_EXTERNAL_REFCOUNT
-
 /// Base class for OpenVX 'objects' wrappers
 template <typename T> class RefWrapper
 {
@@ -436,27 +435,46 @@ public:
     static const vx_enum vxTypeEnum = RefTypeTraits <T>::vxTypeEnum;
 
     /// Default constructor
-    RefWrapper() : ref(0), refcount(0)
+    RefWrapper()
+        : ref(0)
+#ifdef IVX_USE_EXTERNAL_REFCOUNT
+        , refcount(0)
+#endif
     {}
 
     /// Constructor
     /// \param r OpenVX 'object' (e.g. vx_image)
     /// \param retainRef flag indicating whether to increase ref counter in constructor (false by default)
-    explicit RefWrapper(T r, bool retainRef = false) : ref(0), refcount(0)
+    explicit RefWrapper(T r, bool retainRef = false)
+        : ref(0)
+#ifdef IVX_USE_EXTERNAL_REFCOUNT
+        , refcount(0)
+#endif
+    { reset(r, retainRef); }
+
+    /// Constructor
+    /// \param r vx_reference keeping the OpenVX 'object' of the 'vxType' type
+    /// \param retainRef flag indicating whether to increase ref counter in constructor (false by default)
+    explicit RefWrapper(vx_reference r, bool retainRef = false)
+        : ref(0)
+#ifdef IVX_USE_EXTERNAL_REFCOUNT
+            , refcount(0)
+#endif
     { reset(r, retainRef); }
 
     /// Copy constructor
-    RefWrapper(const RefWrapper& r) : ref(r.ref), refcount(r.refcount)
+    RefWrapper(const RefWrapper& r)
+        : ref(r.ref)
+#ifdef IVX_USE_EXTERNAL_REFCOUNT
+        , refcount(r.refcount)
+#endif
     { addRef(); }
 
 #ifndef IVX_USE_CXX98
     /// Move constructor
-    RefWrapper(RefWrapper&& rw) noexcept : RefWrapper()
-    {
-        using std::swap;
-        swap(ref, rw.ref);
-        swap(refcount, rw.refcount);
-    }
+    RefWrapper(RefWrapper&& rw) noexcept
+        : RefWrapper()
+    { swap(rw); }
 #endif
 
     /// Casting to the wrapped OpenVX 'object'
@@ -465,7 +483,7 @@ public:
 
     /// Casting to vx_reference since every OpenVX 'object' extends it
     operator vx_reference() const
-    { return castToReference(ref); }
+    { return (vx_reference)ref; }
 
     /// Assigning a new value (decreasing ref counter for the old one)
     /// \param r OpenVX 'object' (e.g. vx_image)
@@ -474,11 +492,11 @@ public:
     {
         release();
         ref = r;
-#ifdef VX_VERSION_1_1
-        if(retainRef) addRef();
-#else
+#ifdef IVX_USE_EXTERNAL_REFCOUNT
         // if 'retainRef' -just don't use ref-counting for v 1.0
         if(!retainRef) refcount = new int(1);
+#else
+        if(retainRef) addRef();
 #endif
         checkRef();
     }
@@ -497,12 +515,20 @@ public:
         return tmp;
     }
 
+    /// Swap with another instance
+    void swap(RefWrapper& that)
+    {
+        using std::swap;
+        swap(ref, that.ref);
+#ifdef IVX_USE_EXTERNAL_REFCOUNT
+        swap(refcount, that.refcount);
+#endif
+    }
+
     /// Unified assignment operator (covers both copy and move cases)
     RefWrapper& operator=(RefWrapper r)
     {
-        using std::swap;
-        swap(ref, r.ref);
-        swap(refcount, r.refcount);
+        swap(r);
         return *this;
     }
 
@@ -539,29 +565,33 @@ public:
 
 protected:
     T ref;
+#ifdef IVX_USE_EXTERNAL_REFCOUNT
     int* refcount;
+#endif
 
     void addRef()
     {
-#ifdef VX_VERSION_1_1
-        if(ref) IVX_CHECK_STATUS(vxRetainReference(castToReference(ref)));
-#else //TODO: make thread-safe
+#ifdef IVX_USE_EXTERNAL_REFCOUNT
+        //TODO: not thread-safe
         if(refcount) ++(*refcount);
+#else
+        if(ref) IVX_CHECK_STATUS(vxRetainReference(castToReference(ref)));
 #endif
     }
 
     void release()
     {
-#ifdef VX_VERSION_1_1
-        if(ref) RefTypeTraits<T>::release(ref);
-#else //TODO: make thread-safe
+#ifdef IVX_USE_EXTERNAL_REFCOUNT
+        //TODO: not thread-safe
         if(refcount && --(*refcount) == 0)
         {
             if(ref) RefTypeTraits<T>::release(ref);
-            ref = 0;
             delete refcount;
-            refcount = 0;
         }
+        ref = 0;
+        refcount = 0;
+#else
+        if(ref) RefTypeTraits<T>::release(ref);
 #endif
     }
 
@@ -577,6 +607,28 @@ protected:
     { release(); }
 };
 
+#define IVX_REF_CTOR_DEFAULT(Class) \
+    Class() : RefWrapper() {}
+
+#define IVX_REF_CTOR_VXTYPE(Class) \
+    explicit Class(Class::vxType _ref, bool retainRef = false) : RefWrapper(_ref, retainRef) {}
+
+#define IVX_REF_CTOR_VXREF(Class) \
+    explicit Class(vx_reference _ref, bool retainRef = false) : RefWrapper(_ref, retainRef) {}
+
+#define IVX_REF_CTOR_COPY(Class) \
+    Class(const Class& _obj) : RefWrapper(_obj) {}
+
+#ifdef IVX_USE_CXX98
+    #define IVX_REF_CTOR_MOVE(Class)
+#else
+    #define IVX_REF_CTOR_MOVE(Class) \
+        Class(Class&& _obj) : RefWrapper(std::move(_obj)) {}
+#endif
+
+#define IVX_REF_ASSIGN(Class) \
+    Class& operator=(Class _obj) { swap(_obj); return *this; }
+
 #ifdef IVX_USE_CXX98
 
     #define IVX_REF_STD_CTORS_AND_ASSIGNMENT(Class) \
@@ -584,7 +636,7 @@ protected:
         explicit Class(Class::vxType _ref, bool retainRef = false) : RefWrapper(_ref, retainRef) {} \
         Class(const Class& _obj) : RefWrapper(_obj) {} \
         \
-        Class& operator=(Class _obj) { using std::swap; swap(ref, _obj.ref); swap(refcount, _obj.refcount); return *this; }
+        Class& operator=(Class _obj) { swap(_obj); return *this; }
 
 #else
 
@@ -594,7 +646,7 @@ protected:
         Class(const Class& _obj) : RefWrapper(_obj) {} \
         Class(Class&& _obj) : RefWrapper(std::move(_obj)) {} \
         \
-        Class& operator=(Class _obj) { using std::swap; swap(ref, _obj.ref); swap(refcount, _obj.refcount); return *this; }
+        Class& operator=(Class _obj) { swap(_obj); return *this; }
 
 #endif // IVX_USE_CXX98
 
@@ -683,11 +735,17 @@ public:
         return tmp;
     }
 
-    /// Unified assignment operator (covers both copy and move cases)
-    RefWrapper& operator=(RefWrapper r)
+    /// Swap with another instance
+    void swap(RefWrapper& that)
     {
         using std::swap;
         swap(ref, r.ref);
+    }
+
+    /// Unified assignment operator (covers both copy and move cases)
+    RefWrapper& operator=(RefWrapper r)
+    {
+        swap(r);
         return *this;
     }
 
@@ -732,7 +790,7 @@ protected:
         explicit Class(Class::vxType _ref, bool retainRef = false) : RefWrapper(_ref, retainRef) {} \
         Class(const Class& _obj) : RefWrapper(_obj) {} \
         \
-        Class& operator=(Class _obj) { using std::swap; swap(ref, _obj.ref); return *this; }
+        Class& operator=(Class _obj) { swap(_obj); return *this; }
 
 #else
 
@@ -742,7 +800,7 @@ protected:
         Class(const Class& _obj) : RefWrapper(_obj) {} \
         Class(Class&& _obj) : RefWrapper(std::move(_obj)) {} \
         \
-        Class& operator=(Class _obj) { using std::swap; swap(ref, _obj.ref); return *this; }
+        Class& operator=(Class _obj) { swap(_obj); return *this; }
 
 #endif // IVX_USE_CXX98
 
@@ -1382,18 +1440,20 @@ public:
     {}
 #endif
 
-    Image& operator=(Image _obj)
+    /// Swap with another instance
+    void swap(Image& that)
     {
-        using std::swap;
-        swap(ref, _obj.ref);
-#ifdef IVX_USE_EXTERNAL_REFCOUNT
-        swap(refcount, _obj.refcount);
-#endif
+        RefWrapper::swap(that);
 #ifdef IVX_USE_OPENCV
         cv::Mat tmp = _mat;
-        _mat = _obj._mat;
-        _obj._mat = tmp;
+        _mat = that._mat;
+        that._mat = tmp;
 #endif
+    }
+
+    Image& operator=(Image _obj)
+    {
+        swap(_obj);
         return *this;
     }
 
@@ -1857,7 +1917,7 @@ public:
         if(mat.empty()) throw WrapperError(std::string(__func__)+"(): empty cv::Mat");
         Image img = createFromHandle(context, matTypeToFormat(mat.type()), createAddressing(mat), mat.data );
         img._mat = mat;
-        return img
+        return img;
     }
 
 #ifdef VX_VERSION_1_1
