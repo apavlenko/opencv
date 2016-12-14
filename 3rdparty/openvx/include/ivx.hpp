@@ -37,6 +37,9 @@ Details: TBD
     #endif
 #endif // IVX_USE_CXX98
 
+// let's use this for both 1.0 and 1.1 for some time
+#define IVX_USE_EXTERNAL_REFCOUNT
+
 #ifndef IVX_USE_EXTERNAL_REFCOUNT
     // checking OpenVX version
     #ifndef VX_VERSION_1_1
@@ -78,6 +81,7 @@ Details: TBD
     }
 #endif
 
+#define IVX_USE_OPENCV
 #ifdef IVX_USE_OPENCV
     #include "opencv2/core.hpp"
 #endif
@@ -1357,7 +1361,56 @@ static const vx_enum
 class Image : public RefWrapper<vx_image>
 {
 public:
-    IVX_REF_STD_CTORS_AND_ASSIGNMENT(Image);
+
+    Image() : RefWrapper()
+    {}
+
+    explicit Image(Image::vxType _ref, bool retainRef = false) : RefWrapper(_ref, retainRef)
+    {}
+
+    Image(const Image& _obj) : RefWrapper(_obj)
+#ifdef IVX_USE_OPENCV
+      , _mat(_obj._mat)
+#endif
+    {}
+
+#ifndef IVX_USE_CXX98
+    Image(Image&& _obj) : RefWrapper(std::move(_obj))
+#ifdef IVX_USE_OPENCV
+        , _mat(_obj._mat)
+#endif
+    {}
+#endif
+
+    Image& operator=(Image _obj)
+    {
+        using std::swap;
+        swap(ref, _obj.ref);
+#ifdef IVX_USE_EXTERNAL_REFCOUNT
+        swap(refcount, _obj.refcount);
+#endif
+#ifdef IVX_USE_OPENCV
+        cv::Mat tmp = _mat;
+        _mat = _obj._mat;
+        _obj._mat = tmp;
+#endif
+        return *this;
+    }
+
+    ~Image()
+    {
+#if defined(VX_VERSION_1_1) && defined (IVX_USE_EXTERNAL_REFCOUNT)
+        // TODO: not thread-safe
+        bool needSwapHandle =
+                refcount && (*refcount) == 1
+                && memType()  != VX_MEMORY_TYPE_NONE
+#ifdef IVX_USE_OPENCV
+                && _mat.empty()
+#endif
+        ;
+        if(needSwapHandle) swapHandle();
+#endif // VX_VERSION_1_1 && IVX_USE_EXTERNAL_REFCOUNT
+    }
 
     /// vxCreateImage() wrapper
     static Image create(vx_context context, vx_uint32 width, vx_uint32 height, vx_df_image format)
@@ -1473,6 +1526,9 @@ public:
     /// \param prevPtrs storage for the previous addresses of image planes data, can be of image planes size or empty when previous pointers are not needed
     void swapHandle(const std::vector<void*>& newPtrs, std::vector<void*>& prevPtrs)
     {
+#ifdef IVX_USE_OPENCV
+        if(!_mat.empty()) throw WrapperError(std::string(__func__)+"(): the image is created from cv::Mat, use swapMat() instead");
+#endif
         vx_size num = planes();
         if(num == 0)
             throw WrapperError(std::string(__func__)+"(): unexpected planes number");
@@ -1491,6 +1547,9 @@ public:
     /// \return the previuos address of image data
     void* swapHandle(void* newPtr)
     {
+#ifdef IVX_USE_OPENCV
+        if(!_mat.empty()) throw WrapperError(std::string(__func__)+"(): the image is created from cv::Mat, use swapMat() instead");
+#endif
         if(planes() != 1) throw WrapperError(std::string(__func__)+"(): not a single plane image");
         void* prevPtr = 0;
         IVX_CHECK_STATUS( vxSwapImageHandle(ref, &newPtr, &prevPtr, 1) );
@@ -1499,7 +1558,12 @@ public:
 
     /// vxSwapImageHandle() wrapper for the case when no new pointers provided and previous ones are not needed (retrive memory back)
     void swapHandle()
-    { IVX_CHECK_STATUS( vxSwapImageHandle(ref, 0, 0, 0) ); }
+    {
+#ifdef IVX_USE_OPENCV
+        if(!_mat.empty()) throw WrapperError(std::string(__func__)+"(): the image is created from cv::Mat, use swapMat() instead");
+#endif
+        IVX_CHECK_STATUS( vxSwapImageHandle(ref, 0, 0, 0) );
+    }
 
     /// vxCreateImageFromChannel() wrapper
     Image createFromChannel(vx_enum channel)
@@ -1785,18 +1849,45 @@ static const vx_enum
         copyFrom(planeIdx, createAddressing((vx_uint32)m.cols, (vx_uint32)m.rows, (vx_int32)m.elemSize(), (vx_int32)m.step), m.ptr());
     }
 
-/*
 private:
     cv::Mat _mat; // TODO: update copy/move-c-tors, operator=() and swapHandles()
 public:
-    static Image createFromHandle(vx_context context, const cv::Mat& mat)
+    static Image createFromMat(vx_context context, const cv::Mat& mat)
     {
         if(mat.empty()) throw WrapperError(std::string(__func__)+"(): empty cv::Mat");
-        Image res = createFromHandle(context, matTypeToFormat(mat.type()), createAddressing(mat), mat.data );
-        res._mat = mat;
-        return res;
+        Image img = createFromHandle(context, matTypeToFormat(mat.type()), createAddressing(mat), mat.data );
+        img._mat = mat;
+        return img
     }
-*/
+
+#ifdef VX_VERSION_1_1
+    cv::Mat swapMat(const cv::Mat& matNew)
+    {
+        if(_mat.empty()) throw WrapperError(std::string(__func__)+"(): no associated cv::Mat");
+        vx_imagepatch_addressing_t
+                addrOld = createAddressing(_mat),
+                addrNew = createAddressing(matNew);
+        bool same =
+                addrOld.dim_x    == addrNew.dim_x &&
+                addrOld.dim_y    == addrNew.dim_y &&
+                addrOld.stride_x == addrNew.stride_x &&
+                addrOld.stride_y == addrNew.stride_y;
+        if(!same) throw WrapperError(std::string(__func__)+"(): incompatible cv::Mat");
+
+        cv::Mat matOld = _mat;
+        swapHandle(matNew.data);
+        _mat = matNew;
+        return matOld;
+    }
+
+    cv::Mat swapMat()
+    {
+        cv::Mat matOld = _mat;
+        swapHandle();
+        _mat = cv::Mat();
+        return matOld;
+    }
+#endif // VX_VERSION_1_1
 #endif //IVX_USE_OPENCV
 
     struct Patch;
