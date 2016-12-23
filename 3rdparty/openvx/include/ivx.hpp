@@ -429,7 +429,7 @@ struct is_ref<T, decltype(T::vxType(), void())> : std::true_type {};
 
 // allow vx_reference extensions
 template<typename T>
-struct is_ref<T, decltype(RefTypeTraits<T>::vxTypeEnum, void())> : std::true_type {};
+struct is_ref<T, decltype(_valTypeTraits<T>::vxTypeEnum, void())> : std::true_type {};
 
 /// Casting to vx_reference with compile-time check
 
@@ -451,59 +451,22 @@ inline void checkVxRef(vx_reference ref, const std::string& func, const std::str
 /// Helper macro for checking the provided OpenVX 'object' and throwing a \RuntimeError in case of error
 #define IVX_CHECK_REF(code) checkVxRef(castToReference(code), __func__, #code)
 
-template <typename T>
+#ifdef IVX_USE_EXTERNAL_REFCOUNT
+// implement own ref counter
+template <typename T /*OpenVX 'object'*/>
 class RefCountable
 {
 public:
-    RefCountable(T ref, bool keepOwnership = true) : _ref(ref)
-    { if(!keepOwnership) addRef(); }
+    RefCountable(T val = 0, bool keepOwnership = true)
+        : _val(val), _refcount(0)
+    { if(val && keepOwnership) _refcount = new int(1); }
 
-    RefCountable(const RefCountable& that) : _ref(that._ref)
+    RefCountable(const RefCountable& that)
+        : _val(that._val), _refcount(that._refcount)
     { addRef(); }
 
-    void swap(RefCountable& that)
-    { std::swap(_ref, that._ref); }
-
 #ifndef IVX_USE_CXX98
-    RefCountable(RefCountable&& that) : _ref(0)
-    { swap(that); }
-#endif
-
-    RefCountable& operator=(RefCountable that)
-    { swap(that); return *this; }
-
-    int refCount() const
-    { return -1; }
-
-    void addRef()
-    { if(_ref) IVX_CHECK_STATUS(vxRetainReference(castToReference(_ref))); }
-
-    void release() // TODO: not thread-safe
-    { if(_ref) RefTypeTraits<T>::release(_ref); }
-
-protected:
-    ~RefCountable()
-    { release(); }
-
-private:
-    T _ref;
-};
-
-template <>
-class RefCountable<void>
-{
-public:
-    RefCountable(bool keepOwnership = true) : _refcount(0)
-    { if(keepOwnership) _refcount = new int(1); }
-
-    RefCountable(const RefCountable& that) : _refcount(that._refcount)
-    { addRef(); }
-
-    void swap(RefCountable& that)
-    { std::swap(_refcount, that._refcount); }
-
-#ifndef IVX_USE_CXX98
-    RefCountable(RefCountable&& that) : _refcount(0)
+    RefCountable(_valCountable&& that) : _refcount(0)
     { swap(that); }
 #endif
 
@@ -518,148 +481,154 @@ public:
 
     void release() // TODO: not thread-safe
     {
-        if(_refcount && --(*_refcount) == 0) delete _refcount;
+        if(_refcount && --(*_refcount) == 0)
+        {
+            delete _refcount;
+            if(_val) RefTypeTraits<T>::release(_val);
+        }
         _refcount = 0;
+        _val = 0;
+    }
+
+    void swap(RefCountable& that)
+    {
+        std::swap(_val, that._val);
+        std::swap(_refcount, that._refcount);
     }
 
 protected:
+    T _val;
     ~RefCountable()
     { release(); }
 
 private:
     int* _refcount;
 };
+#else // IVX_USE_EXTERNAL_REFCOUNT
+// use OpenVX object's refcounter
+template <typename T /*OpenVX 'object'*/>
+class RefCountable
+{
+public:
+    RefCountable(T val, bool keepOwnership = true)
+        : _val(val)
+    { if(!keepOwnership) addRef(); }
 
+    RefCountable(const RefCountable& that)
+        : _val(that._val)
+    { addRef(); }
+
+#ifndef IVX_USE_CXX98
+    RefCountable(_valCountable&& that) : _val(0)
+    { swap(that); }
+#endif
+
+    RefCountable& operator=(_valCountable that)
+    { swap(that); return *this; }
+
+    int refCount() const
+    { return -1; }
+
+    void addRef()
+    { if(_val) IVX_CHECK_STATUS(vxRetainReference(castToReference(_val))); }
+
+    void release()
+    {
+        if(_val) RefTypeTraits<T>::release(_val);
+        _val = 0;
+    }
+
+    void swap(_valCountable& that)
+    { std::swap(_val, that._val); }
+
+protected:
+    T _val;
+    ~RefCountable()
+    { release(); }
+};
+#endif // IVX_USE_EXTERNAL_REFCOUNT
 
 /// Base class for OpenVX 'objects' wrappers
-template <typename T> class RefWrapper
+template <typename T>
+class RefWrapper : public RefCountable<T>
 {
 public:
     typedef T vxType;
     static const vx_enum vxTypeEnum = RefTypeTraits <T>::vxTypeEnum;
 
     /// Default constructor
-    RefWrapper()
-        : ref(0)
-#ifdef IVX_USE_EXTERNAL_REFCOUNT
-        , refcount(0)
-#endif
+    RefWrapper() : RefCountable<T>()
     {}
 
     /// Constructor
-    /// \param r OpenVX 'object' (e.g. vx_image)
-    /// \param retainRef flag indicating whether to increase ref counter in constructor (false by default)
-    explicit RefWrapper(T r, bool retainRef = false)
-        : ref(0)
-#ifdef IVX_USE_EXTERNAL_REFCOUNT
-        , refcount(0)
-#endif
-    { reset(r, retainRef); }
+    /// \param obj OpenVX 'object' (e.g. vx_image)
+    /// \param keepOwnership flag indicating whether to release the kept object in destructor (true by default)
+    explicit RefWrapper(T obj, bool keepOwnership = true) : RefCountable<T>(obj, keepOwnership)
+    { checkRef(); }
 
     /// Constructor
-    /// \param r vx_reference keeping the OpenVX 'object' of the 'vxType' type
-    /// \param retainRef flag indicating whether to increase ref counter in constructor (false by default)
-    explicit RefWrapper(vx_reference r, bool retainRef = false)
-        : ref(0)
-#ifdef IVX_USE_EXTERNAL_REFCOUNT
-            , refcount(0)
-#endif
-    { reset(r, retainRef); }
+    /// \param obj vx_reference keeping the OpenVX 'object' of the 'vxType' type
+    /// \param keepOwnership flag indicating whether to release the kept object in destructor (true by default)
+    explicit RefWrapper(vx_reference obj, bool keepOwnership = true) : RefCountable<T>((T)obj, keepOwnership)
+    { checkRef(); }
 
     /// Copy constructor
-    RefWrapper(const RefWrapper& r)
-        : ref(r.ref)
-#ifdef IVX_USE_EXTERNAL_REFCOUNT
-        , refcount(r.refcount)
-#endif
-    { addRef(); }
+    RefWrapper(const RefWrapper& that) : RefCountable<T>(that)
+    { checkRef(); }
 
 #ifndef IVX_USE_CXX98
     /// Move constructor
-    RefWrapper(RefWrapper&& rw) noexcept
-        : RefWrapper()
-    { swap(rw); }
+    RefWrapper(RefWrapper&& that) noexcept
+        :  : RefCountable(that)
+    { checkRef(); }
 #endif
 
     /// Casting to the wrapped OpenVX 'object'
     operator T() const
-    { return ref; }
+    { return this->_val; }
 
     /// Casting to vx_reference since every OpenVX 'object' extends it
     operator vx_reference() const
-    { return (vx_reference)ref; }
+    { return (vx_reference)this->_val; }
 
-    /// Assigning a new value (decreasing ref counter for the old one)
-    /// \param r OpenVX 'object' (e.g. vx_image)
-    /// \param retainRef flag indicating whether to increase ref counter in constructor (false by default)
-    void reset(T r, bool retainRef = false)
+    /// Assigning a new value (releasing the old one)
+    /// \param obj OpenVX 'object' (e.g. vx_image)
+    /// \param keepOwnership flag indicating whether to release the kept object in destructor (true by default)
+    void reset(T obj, bool keepOwnership = true)
     {
-        release();
-        ref = r;
-#ifdef IVX_USE_EXTERNAL_REFCOUNT
-        // if 'retainRef' -just don't use ref-counting for v 1.0
-        if(!retainRef) refcount = new int(1);
-#else
-        if(retainRef) addRef();
-#endif
+        //this->release();
+        RefWrapper tmp(obj, keepOwnership);
+        this->swap(tmp);
         checkRef();
     }
 
-    /// Assigning a new value (decreasing ref counter for the old one)
-    /// \param r vx_reference keeping the OpenVX 'object' of the 'vxType' type
-    /// \param retainRef flag indicating whether to increase ref counter in constructor (false by default)
-    void reset(vx_reference r, bool retainRef = false)
-    {
-        release();
-        ref = (vxType)r;
-#ifdef IVX_USE_EXTERNAL_REFCOUNT
-        // if 'retainRef' -just don't use ref-counting for v 1.0
-        if(!retainRef) refcount = new int(1);
-#else
-        if(retainRef) addRef();
-#endif
-        checkRef();
-    }
 
-    /// Assigning an empty value (decreasing ref counter for the old one)
+    /// Assigning an empty value (releasing the old one)
     void reset()
-    { release(); }
+    { this->release(); }
 
-    /// Dropping kept value without releas decreasing ref counter
+    /// Dropping kept value without release
     /// \return the value being dropped
     T detach()
     {
-        T tmp = ref;
-        ref = 0;
-        release();
-        return tmp;
-    }
-
-    /// Swap with another instance
-    void swap(RefWrapper& that)
-    {
-        using std::swap;
-        swap(ref, that.ref);
-#ifdef IVX_USE_EXTERNAL_REFCOUNT
-        swap(refcount, that.refcount);
-#endif
+        T retVal = this->_val;
+        this->_val = 0;
+        this->release();
+        return retVal;
     }
 
     /// Unified assignment operator (covers both copy and move cases)
-    RefWrapper& operator=(RefWrapper r)
-    {
-        swap(r);
-        return *this;
-    }
+    RefWrapper& operator=(RefWrapper that)
+    { swap(that); return *this; }
 
     /// Checking for non-empty
     bool operator !() const
-    { return ref == 0; }
+    { return this->_val == 0; }
 
 #ifndef IVX_USE_CXX98
     /// Explicit boolean evaluation (called automatically inside conditional operators only)
     explicit operator bool() const
-    { return ref != 0; }
+    { return _val != 0; }
 #endif
 
     /// Getting a context that is kept in each OpenVX 'object' (call get<Context>())
@@ -667,9 +636,9 @@ public:
     C get() const
     {
         typedef int static_assert_context[is_same<C, Context>::value ? 1 : -1];
-        vx_context c = vxGetContext(castToReference(ref));
-        // vxGetContext doesn't increment ref count, let do it in wrapper c-tor
-        return C(c, true);
+        vx_context c = vxGetContext(castToReference(this->_val));
+        // vxGetContext doesn't increment ref count, let's produce non-owning wrapper
+        return C(c, false);
     }
 
 #ifndef IVX_USE_CXX98
@@ -677,64 +646,34 @@ public:
     template<typename C = Context, typename = typename std::enable_if<std::is_same<C, Context>::value>::type>
     C getContext() const
     {
-        vx_context c = vxGetContext(castToReference(ref));
-        // vxGetContext doesn't increment ref count, let do it in wrapper c-tor
-        return C(c, true);
+        vx_context c = vxGetContext(castToReference(_val));
+        // vxGetContext doesn't increment ref count, let's produce non-owning wrapper
+        return C(c, false);
     }
 #endif // IVX_USE_CXX98
 
 protected:
-    T ref;
-#ifdef IVX_USE_EXTERNAL_REFCOUNT
-    int* refcount;
-#endif
-
-    void addRef()
-    {
-#ifdef IVX_USE_EXTERNAL_REFCOUNT
-        //TODO: not thread-safe
-        if(refcount) ++(*refcount);
-#else
-        if(ref) IVX_CHECK_STATUS(vxRetainReference(castToReference(ref)));
-#endif
-    }
-
-    void release()
-    {
-#ifdef IVX_USE_EXTERNAL_REFCOUNT
-        //TODO: not thread-safe
-        if(refcount && --(*refcount) == 0)
-        {
-            if(ref) RefTypeTraits<T>::release(ref);
-            delete refcount;
-        }
-        ref = 0;
-        refcount = 0;
-#else
-        if(ref) RefTypeTraits<T>::release(ref);
-#endif
-    }
 
     void checkRef() const
     {
-        IVX_CHECK_REF(ref);
-        vx_enum type;
-        IVX_CHECK_STATUS(vxQueryReference((vx_reference)ref, VX_REF_ATTRIBUTE_TYPE, &type, sizeof(type)));
-        if (type != vxTypeEnum) throw WrapperError("incompatible reference type");
+        if(this->_val)
+        {
+            IVX_CHECK_REF(this->_val);
+            vx_enum type;
+            IVX_CHECK_STATUS(vxQueryReference((vx_reference)this->_val, VX_REF_ATTRIBUTE_TYPE, &type, sizeof(type)));
+            if (type != vxTypeEnum) throw WrapperError("incompatible reference type");
+        }
     }
-
-    ~RefWrapper()
-    { release(); }
 };
 
 #define IVX_REF_CTOR_DEFAULT(Class) \
     Class() : RefWrapper() {}
 
 #define IVX_REF_CTOR_VXTYPE(Class) \
-    explicit Class(Class::vxType _ref, bool retainRef = false) : RefWrapper(_ref, retainRef) {}
+    explicit Class(Class::vxType _obj, bool retainRef = false) : RefWrapper(_obj, retainRef) {}
 
 #define IVX_REF_CTOR_VXREF(Class) \
-    explicit Class(vx_reference _ref, bool retainRef = false) : RefWrapper(_ref, retainRef) {}
+    explicit Class(vx_reference _obj, bool retainRef = false) : RefWrapper(_obj, retainRef) {}
 
 #define IVX_REF_CTOR_COPY(Class) \
     Class(const Class& _obj) : RefWrapper(_obj) {}
@@ -780,18 +719,18 @@ public:
     static Context getFrom(const T& ref)
     {
         vx_context c = vxGetContext(castToReference(ref));
-        // vxGetContext doesn't increment ref count, let do it in wrapper c-tor
-        return Context(c, true);
+        // vxGetContext doesn't increment ref count, let's produce non-owning wrapper
+        return Context(c, false);
     }
 
     /// vxLoadKernels() wrapper
     void loadKernels(const std::string& module)
-    { IVX_CHECK_STATUS( vxLoadKernels(ref, module.c_str()) ); }
+    { IVX_CHECK_STATUS( vxLoadKernels(_val, module.c_str()) ); }
 
     /// vxQueryContext() wrapper
     template<typename T>
     void query(vx_enum att, T& value) const
-    { IVX_CHECK_STATUS(vxQueryContext(ref, att, &value, sizeof(value))); }
+    { IVX_CHECK_STATUS(vxQueryContext(_val, att, &value, sizeof(value))); }
 
 #ifndef VX_VERSION_1_1
     static const vx_enum
@@ -885,7 +824,7 @@ public:
     std::string implName() const
     {
         std::vector<vx_char> v(VX_MAX_IMPLEMENTATION_NAME);
-        IVX_CHECK_STATUS(vxQueryContext(ref, VX_CONTEXT_IMPLEMENTATION, &v[0], v.size() * sizeof(vx_char)));
+        IVX_CHECK_STATUS(vxQueryContext(_val, VX_CONTEXT_IMPLEMENTATION, &v[0], v.size() * sizeof(vx_char)));
         return std::string(v.data());
     }
 
@@ -893,7 +832,7 @@ public:
     std::string extensionsStr() const
     {
         std::vector<vx_char> v(extensionsSize());
-        IVX_CHECK_STATUS(vxQueryContext(ref, VX_CONTEXT_EXTENSIONS, &v[0], v.size() * sizeof(vx_char)));
+        IVX_CHECK_STATUS(vxQueryContext(_val, VX_CONTEXT_EXTENSIONS, &v[0], v.size() * sizeof(vx_char)));
         return std::string(v.data());
     }
 
@@ -901,7 +840,7 @@ public:
     std::vector<vx_kernel_info_t> kernelTable() const
     {
         std::vector<vx_kernel_info_t> v(uniqueKernelsNum());
-        IVX_CHECK_STATUS(vxQueryContext(ref, VX_CONTEXT_UNIQUE_KERNEL_TABLE, &v[0], v.size() * sizeof(vx_kernel_info_t)));
+        IVX_CHECK_STATUS(vxQueryContext(_val, VX_CONTEXT_UNIQUE_KERNEL_TABLE, &v[0], v.size() * sizeof(vx_kernel_info_t)));
         return v;
     }
 
@@ -926,7 +865,7 @@ public:
     /// vxSetContextAttribute() wrapper
     template<typename T>
     void setAttribute(vx_enum att, const T& value)
-    { IVX_CHECK_STATUS( vxSetContextAttribute(ref, att, &value, sizeof(value)) ); }
+    { IVX_CHECK_STATUS( vxSetContextAttribute(_val, att, &value, sizeof(value)) ); }
 
     /// vxSetContextAttribute(BORDER) wrapper
     void setImmediateBorder(const border_t& bm)
@@ -987,19 +926,19 @@ public:
 
     /// vxVerifyGraph() wrapper
     void verify()
-    { IVX_CHECK_STATUS( vxVerifyGraph(ref) ); }
+    { IVX_CHECK_STATUS( vxVerifyGraph(_val) ); }
 
     /// vxProcessGraph() wrapper
     void process()
-    { IVX_CHECK_STATUS( vxProcessGraph(ref) ); }
+    { IVX_CHECK_STATUS( vxProcessGraph(_val) ); }
 
     /// vxScheduleGraph() wrapper
     void schedule()
-    { IVX_CHECK_STATUS(vxScheduleGraph(ref) ); }
+    { IVX_CHECK_STATUS(vxScheduleGraph(_val) ); }
 
     /// vxWaitGraph() wrapper
     void wait()
-    { IVX_CHECK_STATUS(vxWaitGraph(ref)); }
+    { IVX_CHECK_STATUS(vxWaitGraph(_val)); }
 };
 
 /// vx_kernel wrapper
@@ -1215,12 +1154,12 @@ public:
 
     /// vxSetParameterByIndex() wrapper
     void setParameterByIndex(vx_uint32 index, vx_reference value)
-    { IVX_CHECK_STATUS(vxSetParameterByIndex(ref, index, value)); }
+    { IVX_CHECK_STATUS(vxSetParameterByIndex(_val, index, value)); }
 
     /// vxQueryNode() wrapper
     template<typename T>
     void query(vx_enum att, T& value) const
-    { IVX_CHECK_STATUS( vxQueryNode(ref, att, &value, sizeof(value)) ); }
+    { IVX_CHECK_STATUS( vxQueryNode(_val, att, &value, sizeof(value)) ); }
 
 #ifndef VX_VERSION_1_1
 static const vx_enum
@@ -1294,7 +1233,7 @@ static const vx_enum
     void replicateFlags(std::vector<vx_bool>& flags) const
     {
         if(flags.empty()) flags.resize(paramsNum(), vx_false_e);
-        IVX_CHECK_STATUS( vxQueryNode(ref, VX_NODE_REPLICATE_FLAGS, &flags[0], flags.size()*sizeof(flags[0])) );
+        IVX_CHECK_STATUS( vxQueryNode(_val, VX_NODE_REPLICATE_FLAGS, &flags[0], flags.size()*sizeof(flags[0])) );
     }
 
     /// vxQueryNode(VX_NODE_VALID_RECT_RESET) wrapper
@@ -1309,7 +1248,7 @@ static const vx_enum
     /// vxSetNodeAttribute() wrapper
     template<typename T>
     void setAttribute(vx_enum att, const T& value)
-    { IVX_CHECK_STATUS( vxSetNodeAttribute(ref, att, &value, sizeof(value)) ); }
+    { IVX_CHECK_STATUS( vxSetNodeAttribute(_val, att, &value, sizeof(value)) ); }
 
     /// vxSetNodeAttribute(BORDER) wrapper
     void setBorder(const border_t& bm)
@@ -1564,7 +1503,7 @@ public:
 #endif
         if(planes() != 1) throw WrapperError(IVX_FUNC_NAME+"(): not a single plane image");
         void* prevPtr = 0;
-        IVX_CHECK_STATUS( vxSwapImageHandle(ref, &newPtr, &prevPtr, 1) );
+        IVX_CHECK_STATUS( vxSwapImageHandle(_val, &newPtr, &prevPtr, 1) );
         return prevPtr;
     }
 
@@ -1574,18 +1513,18 @@ public:
 #ifdef IVX_USE_OPENCV
         if(!_mat.empty()) throw WrapperError(IVX_FUNC_NAME+"(): the image is created from cv::Mat, use swapMat() instead");
 #endif
-        IVX_CHECK_STATUS( vxSwapImageHandle(ref, 0, 0, 0) );
+        IVX_CHECK_STATUS( vxSwapImageHandle(_val, 0, 0, 0) );
     }
 
     /// vxCreateImageFromChannel() wrapper
     Image createFromChannel(vx_enum channel)
-    { return Image(vxCreateImageFromChannel(ref, channel)); }
+    { return Image(vxCreateImageFromChannel(_val, channel)); }
 #endif // VX_VERSION_1_1
 
     /// vxQueryImage() wrapper
     template<typename T>
     void query(vx_enum att, T& value) const
-    { IVX_CHECK_STATUS( vxQueryImage(ref, att, &value, sizeof(value)) ); }
+    { IVX_CHECK_STATUS( vxQueryImage(_val, att, &value, sizeof(value)) ); }
 
 #ifndef VX_VERSION_1_1
 static const vx_enum
@@ -1667,7 +1606,7 @@ static const vx_enum
     /// vxSetImageAttribute() wrapper
     template<typename T>
     void setAttribute(vx_enum att, T& value) const
-    { IVX_CHECK_STATUS(vxSetImageAttribute(ref, att, &value, sizeof(value))); }
+    { IVX_CHECK_STATUS(vxSetImageAttribute(_val, att, &value, sizeof(value))); }
 
     /// vxSetImageAttribute(SPACE) wrapper
     void setColorSpace(const vx_enum& sp)
@@ -1677,7 +1616,7 @@ static const vx_enum
     vx_rectangle_t getValidRegion() const
     {
         vx_rectangle_t rect;
-        IVX_CHECK_STATUS( vxGetValidRegionImage(ref, &rect) );
+        IVX_CHECK_STATUS( vxGetValidRegionImage(_val, &rect) );
         return rect;
     }
 
@@ -1688,7 +1627,7 @@ static const vx_enum
     /// vxComputeImagePatchSize() wrapper
     vx_size computePatchSize(vx_uint32 planeIdx, const vx_rectangle_t& rect)
     {
-        vx_size bytes = vxComputeImagePatchSize(ref, &rect, planeIdx);
+        vx_size bytes = vxComputeImagePatchSize(_val, &rect, planeIdx);
         if (bytes == 0) throw WrapperError(IVX_FUNC_NAME+"(): vxComputeImagePatchSize returned 0");
         return bytes;
     }
@@ -1696,7 +1635,7 @@ static const vx_enum
 #ifdef VX_VERSION_1_1
     /// vxSetImageValidRectangle() wrapper
     void setValidRectangle(const vx_rectangle_t& rect)
-    { IVX_CHECK_STATUS( vxSetImageValidRectangle(ref, &rect) ); }
+    { IVX_CHECK_STATUS( vxSetImageValidRectangle(_val, &rect) ); }
 #endif // VX_VERSION_1_1
 
     /// Copy image plane content to the provided memory
@@ -1711,11 +1650,11 @@ static const vx_enum
         if (h != addr.dim_y) throw WrapperError("Image::copyTo(): inconsistent dimension Y");
         */
 #ifdef VX_VERSION_1_1
-        IVX_CHECK_STATUS(vxCopyImagePatch(ref, &r, planeIdx, &addr, data, VX_READ_ONLY, VX_MEMORY_TYPE_HOST));
+        IVX_CHECK_STATUS(vxCopyImagePatch(_val, &r, planeIdx, &addr, data, VX_READ_ONLY, VX_MEMORY_TYPE_HOST));
 #else
         vx_imagepatch_addressing_t* a = const_cast<vx_imagepatch_addressing_t*>(&addr);
-        IVX_CHECK_STATUS(vxAccessImagePatch(ref, &r, planeIdx, a, &data, VX_READ_ONLY));
-        IVX_CHECK_STATUS(vxCommitImagePatch(ref, 0, planeIdx, a, data));
+        IVX_CHECK_STATUS(vxAccessImagePatch(_val, &r, planeIdx, a, &data, VX_READ_ONLY));
+        IVX_CHECK_STATUS(vxCommitImagePatch(_val, 0, planeIdx, a, data));
 #endif
     }
 
@@ -1727,16 +1666,16 @@ static const vx_enum
         // TODO: add sizes consistency checks
         /*
         vx_uint32 w = r.end_x - r.start_x, h = r.end_y - r.start_y;
-        //vx_size patchBytes = vxComputeImagePatchSize(ref, &r, planeIdx);
+        //vx_size patchBytes = vxComputeImagePatchSize(_val, &r, planeIdx);
         if (w != addr.dim_x) throw WrapperError("Image::copyFrom(): inconsistent dimension X");
         if (h != addr.dim_y) throw WrapperError("Image::copyFrom(): inconsistent dimension Y");
         */
 #ifdef VX_VERSION_1_1
-        IVX_CHECK_STATUS(vxCopyImagePatch(ref, &r, planeIdx, &addr, (void*)data, VX_WRITE_ONLY, VX_MEMORY_TYPE_HOST));
+        IVX_CHECK_STATUS(vxCopyImagePatch(_val, &r, planeIdx, &addr, (void*)data, VX_WRITE_ONLY, VX_MEMORY_TYPE_HOST));
 #else
         vx_imagepatch_addressing_t* a = const_cast<vx_imagepatch_addressing_t*>(&addr);
-        IVX_CHECK_STATUS(vxAccessImagePatch(ref, &r, planeIdx, a, const_cast<void**>(&data), VX_WRITE_ONLY));
-        IVX_CHECK_STATUS(vxCommitImagePatch(ref, &r, planeIdx, a, data));
+        IVX_CHECK_STATUS(vxAccessImagePatch(_val, &r, planeIdx, a, const_cast<void**>(&data), VX_WRITE_ONLY));
+        IVX_CHECK_STATUS(vxCommitImagePatch(_val, &r, planeIdx, a, data));
 #endif
     }
 
@@ -1746,12 +1685,12 @@ static const vx_enum
                vx_enum usage, vx_enum memoryType = VX_MEMORY_TYPE_HOST )
     {
 #ifdef VX_VERSION_1_1
-        IVX_CHECK_STATUS(vxCopyImagePatch(ref, &rect, planeIdx, &addr, (void*)data, usage, memoryType));
+        IVX_CHECK_STATUS(vxCopyImagePatch(_val, &rect, planeIdx, &addr, (void*)data, usage, memoryType));
 #else
         (void)memoryType;
         vx_imagepatch_addressing_t* a = const_cast<vx_imagepatch_addressing_t*>(&addr);
-        IVX_CHECK_STATUS(vxAccessImagePatch(ref, &rect, planeIdx, a, &data, usage));
-        IVX_CHECK_STATUS(vxCommitImagePatch(ref, &rect, planeIdx, a, data));
+        IVX_CHECK_STATUS(vxAccessImagePatch(_val, &rect, planeIdx, a, &data, usage));
+        IVX_CHECK_STATUS(vxCommitImagePatch(_val, &rect, planeIdx, a, data));
 #endif
     }
 
@@ -1996,7 +1935,7 @@ public:
 
     /// vxMapImagePatch(VX_READ_ONLY, planeIdx valid region)
     void map(vx_image img, vx_uint32 planeIdx)
-    { map(img, planeIdx, Image(img, true).getValidRegion()); }
+    { map(img, planeIdx, Image(img, false).getValidRegion()); }
 
     /// vxMapImagePatch() wrapper (or vxAccessImagePatch() for 1.0)
     void map(vx_image img, vx_uint32 planeIdx, const vx_rectangle_t& rect, vx_enum usage = VX_READ_ONLY, vx_uint32 flags = 0)
@@ -2099,7 +2038,7 @@ static const vx_enum VX_SCALAR_TYPE = VX_SCALAR_ATTRIBUTE_TYPE;
     vx_enum type()
     {
         vx_enum val;
-        IVX_CHECK_STATUS( vxQueryScalar(ref, VX_SCALAR_TYPE, &val, sizeof(val)) );
+        IVX_CHECK_STATUS( vxQueryScalar(_val, VX_SCALAR_TYPE, &val, sizeof(val)) );
         return val;
     }
 
@@ -2110,9 +2049,9 @@ static const vx_enum VX_SCALAR_TYPE = VX_SCALAR_ATTRIBUTE_TYPE;
         if (!areTypesCompatible(TypeToEnum<T>::value, type()))
             throw WrapperError(IVX_FUNC_NAME+"(): incompatible types");
 #ifdef VX_VERSION_1_1
-        IVX_CHECK_STATUS( vxCopyScalar(ref, &val, VX_READ_ONLY, VX_MEMORY_TYPE_HOST) );
+        IVX_CHECK_STATUS( vxCopyScalar(_val, &val, VX_READ_ONLY, VX_MEMORY_TYPE_HOST) );
 #else
-        IVX_CHECK_STATUS( vxReadScalarValue(ref, &val) );
+        IVX_CHECK_STATUS( vxReadScalarValue(_val, &val) );
 #endif
     }
 
@@ -2133,9 +2072,9 @@ static const vx_enum VX_SCALAR_TYPE = VX_SCALAR_ATTRIBUTE_TYPE;
         if (!areTypesCompatible(TypeToEnum<T>::value, type()))
             throw WrapperError(IVX_FUNC_NAME+"(): incompatible types");
 #ifdef VX_VERSION_1_1
-        IVX_CHECK_STATUS(vxCopyScalar(ref, &val, VX_WRITE_ONLY, VX_MEMORY_TYPE_HOST));
+        IVX_CHECK_STATUS(vxCopyScalar(_val, &val, VX_WRITE_ONLY, VX_MEMORY_TYPE_HOST));
 #else
-        IVX_CHECK_STATUS( vxWriteScalarValue(ref, &val) );
+        IVX_CHECK_STATUS( vxWriteScalarValue(_val, &val) );
 #endif
     }
 };
@@ -2166,7 +2105,7 @@ static const vx_enum
     static Threshold createBinary(vx_context c, vx_enum dataType, vx_int32 val)
     {
         Threshold thr = create(c, VX_THRESHOLD_TYPE_BINARY, dataType);
-        IVX_CHECK_STATUS( vxSetThresholdAttribute(thr.ref, VX_THRESHOLD_THRESHOLD_VALUE, &val, sizeof(val)) );
+        IVX_CHECK_STATUS( vxSetThresholdAttribute(thr._val, VX_THRESHOLD_THRESHOLD_VALUE, &val, sizeof(val)) );
         return thr;
     }
 
@@ -2174,15 +2113,15 @@ static const vx_enum
     static Threshold createRange(vx_context c, vx_enum dataType, vx_int32 valLower, vx_int32 valUpper)
     {
         Threshold thr = create(c, VX_THRESHOLD_TYPE_RANGE, dataType);
-        IVX_CHECK_STATUS( vxSetThresholdAttribute(thr.ref, VX_THRESHOLD_THRESHOLD_LOWER, &valLower, sizeof(valLower)) );
-        IVX_CHECK_STATUS( vxSetThresholdAttribute(thr.ref, VX_THRESHOLD_THRESHOLD_UPPER, &valUpper, sizeof(valUpper)) );
+        IVX_CHECK_STATUS( vxSetThresholdAttribute(thr._val, VX_THRESHOLD_THRESHOLD_LOWER, &valLower, sizeof(valLower)) );
+        IVX_CHECK_STATUS( vxSetThresholdAttribute(thr._val, VX_THRESHOLD_THRESHOLD_UPPER, &valUpper, sizeof(valUpper)) );
         return thr;
     }
 
     /// vxQueryThreshold() wrapper
     template<typename T>
     void query(vx_enum att, T& val) const
-    { IVX_CHECK_STATUS( vxQueryThreshold(ref, att, &val, sizeof(val)) ); }
+    { IVX_CHECK_STATUS( vxQueryThreshold(_val, att, &val, sizeof(val)) ); }
 
     /// vxQueryThreshold(VX_THRESHOLD_TYPE) wrapper
     vx_enum type() const
@@ -2242,23 +2181,23 @@ static const vx_enum
 
     /// vxSetThresholdAttribute(THRESHOLD_VALUE) wrapper
     void setValue(vx_int32 &val)
-    { IVX_CHECK_STATUS(vxSetThresholdAttribute(ref, VX_THRESHOLD_THRESHOLD_VALUE, &val, sizeof(val))); }
+    { IVX_CHECK_STATUS(vxSetThresholdAttribute(_val, VX_THRESHOLD_THRESHOLD_VALUE, &val, sizeof(val))); }
 
     /// vxSetThresholdAttribute(THRESHOLD_LOWER) wrapper
     void setValueLower(vx_int32 &val)
-    { IVX_CHECK_STATUS(vxSetThresholdAttribute(ref, VX_THRESHOLD_THRESHOLD_LOWER, &val, sizeof(val))); }
+    { IVX_CHECK_STATUS(vxSetThresholdAttribute(_val, VX_THRESHOLD_THRESHOLD_LOWER, &val, sizeof(val))); }
 
     /// vxSetThresholdAttribute(THRESHOLD_UPPER) wrapper
     void setValueUpper(vx_int32 &val)
-    { IVX_CHECK_STATUS(vxSetThresholdAttribute(ref, VX_THRESHOLD_THRESHOLD_UPPER, &val, sizeof(val))); }
+    { IVX_CHECK_STATUS(vxSetThresholdAttribute(_val, VX_THRESHOLD_THRESHOLD_UPPER, &val, sizeof(val))); }
 
     /// vxSetThresholdAttribute(TRUE_VALUE) wrapper
     void setValueTrue(vx_int32 &val)
-    { IVX_CHECK_STATUS(vxSetThresholdAttribute(ref, VX_THRESHOLD_TRUE_VALUE, &val, sizeof(val))); }
+    { IVX_CHECK_STATUS(vxSetThresholdAttribute(_val, VX_THRESHOLD_TRUE_VALUE, &val, sizeof(val))); }
 
     /// vxSetThresholdAttribute(FALSE_VALUE) wrapper
     void setValueFalse(vx_int32 &val)
-    { IVX_CHECK_STATUS(vxSetThresholdAttribute(ref, VX_THRESHOLD_FALSE_VALUE, &val, sizeof(val))); }
+    { IVX_CHECK_STATUS(vxSetThresholdAttribute(_val, VX_THRESHOLD_FALSE_VALUE, &val, sizeof(val))); }
 };
 
 /// vx_array wrapper
@@ -2286,7 +2225,7 @@ public:
 
     template<typename T>
     void query(vx_enum att, T& value) const
-    { IVX_CHECK_STATUS( vxQueryArray(ref, att, &value, sizeof(value)) ); }
+    { IVX_CHECK_STATUS( vxQueryArray(_val, att, &value, sizeof(value)) ); }
 
     vx_enum itemType() const
     {
@@ -2318,13 +2257,13 @@ public:
 
     void addItems(vx_size count, const void* ptr, vx_size stride)
     {
-        IVX_CHECK_STATUS(vxAddArrayItems(ref, count, ptr, stride));
+        IVX_CHECK_STATUS(vxAddArrayItems(_val, count, ptr, stride));
     }
 
     void truncateArray(vx_size new_count)
     {
         if(new_count <= itemCount())
-            IVX_CHECK_STATUS(vxTruncateArray(ref, new_count));
+            IVX_CHECK_STATUS(vxTruncateArray(_val, new_count));
         else
             throw WrapperError(IVX_FUNC_NAME + "(): array is too small");
     }
@@ -2333,11 +2272,11 @@ public:
     {
         if (!data) throw WrapperError(IVX_FUNC_NAME + "(): output pointer is 0");
 #ifdef VX_VERSION_1_1
-        IVX_CHECK_STATUS(vxCopyArrayRange(ref, start, end, itemSize(), data, VX_READ_ONLY, VX_MEMORY_TYPE_HOST));
+        IVX_CHECK_STATUS(vxCopyArrayRange(_val, start, end, itemSize(), data, VX_READ_ONLY, VX_MEMORY_TYPE_HOST));
 #else
         vx_size stride = itemSize();
-        IVX_CHECK_STATUS(vxAccessArrayRange(ref, start, end, &stride, &data, VX_READ_ONLY));
-        IVX_CHECK_STATUS(vxCommitArrayRange(ref, start, end, data));
+        IVX_CHECK_STATUS(vxAccessArrayRange(_val, start, end, &stride, &data, VX_READ_ONLY));
+        IVX_CHECK_STATUS(vxCommitArrayRange(_val, start, end, data));
 #endif
     }
 
@@ -2348,11 +2287,11 @@ public:
     {
         if (!data) throw WrapperError(IVX_FUNC_NAME + "(): input pointer is 0");
 #ifdef VX_VERSION_1_1
-        IVX_CHECK_STATUS(vxCopyArrayRange(ref, start, end, itemSize(), const_cast<void*>(data), VX_WRITE_ONLY, VX_MEMORY_TYPE_HOST));
+        IVX_CHECK_STATUS(vxCopyArrayRange(_val, start, end, itemSize(), const_cast<void*>(data), VX_WRITE_ONLY, VX_MEMORY_TYPE_HOST));
 #else
         vx_size stride = itemSize();
-        IVX_CHECK_STATUS(vxAccessArrayRange(ref, start, end, &stride, const_cast<void**>(&data), VX_WRITE_ONLY));
-        IVX_CHECK_STATUS(vxCommitArrayRange(ref, start, end, data));
+        IVX_CHECK_STATUS(vxAccessArrayRange(_val, start, end, &stride, const_cast<void**>(&data), VX_WRITE_ONLY));
+        IVX_CHECK_STATUS(vxCommitArrayRange(_val, start, end, data));
 #endif
     }
 
@@ -2363,11 +2302,11 @@ public:
     {
         if (!data) throw WrapperError(IVX_FUNC_NAME + "(): data pointer is 0");
 #ifdef VX_VERSION_1_1
-        IVX_CHECK_STATUS(vxCopyArrayRange(ref, start, end, itemSize(), data, usage, memType));
+        IVX_CHECK_STATUS(vxCopyArrayRange(_val, start, end, itemSize(), data, usage, memType));
 #else
         vx_size stride = itemSize();
-        IVX_CHECK_STATUS(vxAccessArrayRange(ref, start, end, &stride, &data, usage));
-        IVX_CHECK_STATUS(vxCommitArrayRange(ref, start, end, data));
+        IVX_CHECK_STATUS(vxAccessArrayRange(_val, start, end, &stride, &data, usage));
+        IVX_CHECK_STATUS(vxCommitArrayRange(_val, start, end, data));
         (void)memType;
 #endif
     }
@@ -2493,7 +2432,7 @@ public:
 
     template<typename T>
     void query(vx_enum att, T& value) const
-    { IVX_CHECK_STATUS( vxQueryConvolution(ref, att, &value, sizeof(value)) ); }
+    { IVX_CHECK_STATUS( vxQueryConvolution(_val, att, &value, sizeof(value)) ); }
 
     vx_size columns() const
     {
@@ -2529,15 +2468,15 @@ public:
     }
 
     void setScale(vx_uint32 newScale)
-    { IVX_CHECK_STATUS( vxSetConvolutionAttribute(ref, VX_CONVOLUTION_SCALE, &newScale, sizeof(newScale)) ); }
+    { IVX_CHECK_STATUS( vxSetConvolutionAttribute(_val, VX_CONVOLUTION_SCALE, &newScale, sizeof(newScale)) ); }
 
     void copyTo(void* data)
     {
         if (!data) throw WrapperError(IVX_FUNC_NAME + "(): output pointer is 0");
 #ifdef VX_VERSION_1_1
-        IVX_CHECK_STATUS(vxCopyConvolutionCoefficients(ref, data, VX_READ_ONLY, VX_MEMORY_TYPE_HOST));
+        IVX_CHECK_STATUS(vxCopyConvolutionCoefficients(_val, data, VX_READ_ONLY, VX_MEMORY_TYPE_HOST));
 #else
-        IVX_CHECK_STATUS(vxReadConvolutionCoefficients(ref, (vx_int16 *)data));
+        IVX_CHECK_STATUS(vxReadConvolutionCoefficients(_val, (vx_int16 *)data));
 #endif
     }
 
@@ -2545,9 +2484,9 @@ public:
     {
         if (!data) throw WrapperError(IVX_FUNC_NAME + "(): input pointer is 0");
 #ifdef VX_VERSION_1_1
-        IVX_CHECK_STATUS(vxCopyConvolutionCoefficients(ref, const_cast<void*>(data), VX_WRITE_ONLY, VX_MEMORY_TYPE_HOST));
+        IVX_CHECK_STATUS(vxCopyConvolutionCoefficients(_val, const_cast<void*>(data), VX_WRITE_ONLY, VX_MEMORY_TYPE_HOST));
 #else
-        IVX_CHECK_STATUS(vxWriteConvolutionCoefficients(ref, (const vx_int16 *)data));
+        IVX_CHECK_STATUS(vxWriteConvolutionCoefficients(_val, (const vx_int16 *)data));
 #endif
     }
 
@@ -2555,12 +2494,12 @@ public:
     {
         if (!data) throw WrapperError(IVX_FUNC_NAME + "(): data pointer is 0");
 #ifdef VX_VERSION_1_1
-        IVX_CHECK_STATUS(vxCopyConvolutionCoefficients(ref, data, usage, memType));
+        IVX_CHECK_STATUS(vxCopyConvolutionCoefficients(_val, data, usage, memType));
 #else
         if (usage == VX_READ_ONLY)
-            IVX_CHECK_STATUS(vxReadConvolutionCoefficients(ref, (vx_int16 *)data));
+            IVX_CHECK_STATUS(vxReadConvolutionCoefficients(_val, (vx_int16 *)data));
         else if (usage == VX_WRITE_ONLY)
-            IVX_CHECK_STATUS(vxWriteConvolutionCoefficients(ref, (const vx_int16 *)data));
+            IVX_CHECK_STATUS(vxWriteConvolutionCoefficients(_val, (const vx_int16 *)data));
         else
             throw WrapperError(IVX_FUNC_NAME + "(): unknown copy direction");
         (void)memType;
@@ -2647,7 +2586,7 @@ public:
 
     template<typename T>
     void query(vx_enum att, T& value) const
-    { IVX_CHECK_STATUS( vxQueryMatrix(ref, att, &value, sizeof(value)) ); }
+    { IVX_CHECK_STATUS( vxQueryMatrix(_val, att, &value, sizeof(value)) ); }
 
     vx_enum dataType() const
     {
@@ -2697,9 +2636,9 @@ public:
     {
         if (!data) throw WrapperError(IVX_FUNC_NAME + "(): output pointer is 0");
 #ifdef VX_VERSION_1_1
-        IVX_CHECK_STATUS(vxCopyMatrix(ref, data, VX_READ_ONLY, VX_MEMORY_TYPE_HOST));
+        IVX_CHECK_STATUS(vxCopyMatrix(_val, data, VX_READ_ONLY, VX_MEMORY_TYPE_HOST));
 #else
-        IVX_CHECK_STATUS(vxReadMatrix(ref, data));
+        IVX_CHECK_STATUS(vxReadMatrix(_val, data));
 #endif
     }
 
@@ -2707,9 +2646,9 @@ public:
     {
         if (!data) throw WrapperError(IVX_FUNC_NAME + "(): input pointer is 0");
 #ifdef VX_VERSION_1_1
-        IVX_CHECK_STATUS(vxCopyMatrix(ref, const_cast<void*>(data), VX_WRITE_ONLY, VX_MEMORY_TYPE_HOST));
+        IVX_CHECK_STATUS(vxCopyMatrix(_val, const_cast<void*>(data), VX_WRITE_ONLY, VX_MEMORY_TYPE_HOST));
 #else
-        IVX_CHECK_STATUS(vxWriteMatrix(ref, data));
+        IVX_CHECK_STATUS(vxWriteMatrix(_val, data));
 #endif
     }
 
@@ -2717,12 +2656,12 @@ public:
     {
         if (!data) throw WrapperError(IVX_FUNC_NAME + "(): data pointer is 0");
 #ifdef VX_VERSION_1_1
-        IVX_CHECK_STATUS(vxCopyMatrix(ref, data, usage, memType));
+        IVX_CHECK_STATUS(vxCopyMatrix(_val, data, usage, memType));
 #else
         if (usage == VX_READ_ONLY)
-            IVX_CHECK_STATUS(vxReadMatrix(ref, data));
+            IVX_CHECK_STATUS(vxReadMatrix(_val, data));
         else if (usage == VX_WRITE_ONLY)
-            IVX_CHECK_STATUS(vxWriteMatrix(ref, data));
+            IVX_CHECK_STATUS(vxWriteMatrix(_val, data));
         else
             throw WrapperError(IVX_FUNC_NAME + "(): unknown copy direction");
         (void)memType;
@@ -2809,7 +2748,7 @@ public:
     template<typename T>
     void query(vx_enum att, T& value) const
     {
-        IVX_CHECK_STATUS(vxQueryLUT(ref, att, &value, sizeof(value)));
+        IVX_CHECK_STATUS(vxQueryLUT(_val, att, &value, sizeof(value)));
     }
 
 #ifndef VX_VERSION_1_1
@@ -2853,10 +2792,10 @@ public:
     {
         if (!data) throw WrapperError(IVX_FUNC_NAME + "(): output pointer is 0");
 #ifdef VX_VERSION_1_1
-        IVX_CHECK_STATUS(vxCopyLUT(ref, data, VX_READ_ONLY, VX_MEMORY_TYPE_HOST));
+        IVX_CHECK_STATUS(vxCopyLUT(_val, data, VX_READ_ONLY, VX_MEMORY_TYPE_HOST));
 #else
-        IVX_CHECK_STATUS(vxAccessLUT(ref, &data, VX_READ_ONLY));
-        IVX_CHECK_STATUS(vxCommitLUT(ref, data));
+        IVX_CHECK_STATUS(vxAccessLUT(_val, &data, VX_READ_ONLY));
+        IVX_CHECK_STATUS(vxCommitLUT(_val, data));
 #endif
     }
 
@@ -2864,20 +2803,20 @@ public:
     {
         if (!data) throw WrapperError(IVX_FUNC_NAME + "(): input pointer is 0");
 #ifdef VX_VERSION_1_1
-        IVX_CHECK_STATUS(vxCopyLUT(ref, const_cast<void*>(data), VX_WRITE_ONLY, VX_MEMORY_TYPE_HOST));
+        IVX_CHECK_STATUS(vxCopyLUT(_val, const_cast<void*>(data), VX_WRITE_ONLY, VX_MEMORY_TYPE_HOST));
 #else
-        IVX_CHECK_STATUS(vxAccessLUT(ref, const_cast<void**>(&data), VX_WRITE_ONLY));
-        IVX_CHECK_STATUS(vxCommitLUT(ref, data));
+        IVX_CHECK_STATUS(vxAccessLUT(_val, const_cast<void**>(&data), VX_WRITE_ONLY));
+        IVX_CHECK_STATUS(vxCommitLUT(_val, data));
 #endif
     }
 
     void copy(void* data, vx_enum usage, vx_enum memType = VX_MEMORY_TYPE_HOST)
     {
 #ifdef VX_VERSION_1_1
-        IVX_CHECK_STATUS(vxCopyLUT(ref, data, usage, memType));
+        IVX_CHECK_STATUS(vxCopyLUT(_val, data, usage, memType));
 #else
-        IVX_CHECK_STATUS(vxAccessLUT(ref, const_cast<void**>(&data), usage));
-        IVX_CHECK_STATUS(vxCommitLUT(ref, data));
+        IVX_CHECK_STATUS(vxAccessLUT(_val, const_cast<void**>(&data), usage));
+        IVX_CHECK_STATUS(vxCommitLUT(_val, data));
         (void)memType;
 #endif
     }
@@ -2968,7 +2907,7 @@ public:
 
     template<typename T>
     void query(vx_enum att, T& value) const
-    { IVX_CHECK_STATUS( vxQueryPyramid(ref, att, &value, sizeof(value)) ); }
+    { IVX_CHECK_STATUS( vxQueryPyramid(_val, att, &value, sizeof(value)) ); }
 
     vx_size levels() const
     {
@@ -3006,7 +2945,7 @@ public:
     }
 
     Image getLevel(vx_uint32 index)
-    { return Image(vxGetPyramidLevel(ref, index)); }
+    { return Image(vxGetPyramidLevel(_val, index)); }
 };
 
 /*
@@ -3036,7 +2975,7 @@ public:
     template<typename T>
     void query(vx_enum att, T& value) const
     {
-        IVX_CHECK_STATUS(vxQueryDistribution(ref, att, &value, sizeof(value)));
+        IVX_CHECK_STATUS(vxQueryDistribution(_val, att, &value, sizeof(value)));
     }
 
     vx_size dimensions() const
@@ -3090,10 +3029,10 @@ public:
     {
         if (!data) throw WrapperError(IVX_FUNC_NAME + "(): output pointer is 0");
 #ifdef VX_VERSION_1_1
-        IVX_CHECK_STATUS(vxCopyDistribution(ref, data, VX_READ_ONLY, VX_MEMORY_TYPE_HOST));
+        IVX_CHECK_STATUS(vxCopyDistribution(_val, data, VX_READ_ONLY, VX_MEMORY_TYPE_HOST));
 #else
-        IVX_CHECK_STATUS(vxAccessDistribution(ref, &data, VX_READ_ONLY));
-        IVX_CHECK_STATUS(vxCommitDistribution(ref, data));
+        IVX_CHECK_STATUS(vxAccessDistribution(_val, &data, VX_READ_ONLY));
+        IVX_CHECK_STATUS(vxCommitDistribution(_val, data));
 #endif
     }
 
@@ -3101,20 +3040,20 @@ public:
     {
         if (!data) throw WrapperError(IVX_FUNC_NAME + "(): input pointer is 0");
 #ifdef VX_VERSION_1_1
-        IVX_CHECK_STATUS(vxCopyDistribution(ref, const_cast<void*>(data), VX_WRITE_ONLY, VX_MEMORY_TYPE_HOST));
+        IVX_CHECK_STATUS(vxCopyDistribution(_val, const_cast<void*>(data), VX_WRITE_ONLY, VX_MEMORY_TYPE_HOST));
 #else
-        IVX_CHECK_STATUS(vxAccessDistribution(ref, const_cast<void**>(&data), VX_WRITE_ONLY));
-        IVX_CHECK_STATUS(vxCommitDistribution(ref, data));
+        IVX_CHECK_STATUS(vxAccessDistribution(_val, const_cast<void**>(&data), VX_WRITE_ONLY));
+        IVX_CHECK_STATUS(vxCommitDistribution(_val, data));
 #endif
     }
 
     void copy(void* data, vx_enum usage, vx_enum memType = VX_MEMORY_TYPE_HOST)
     {
 #ifdef VX_VERSION_1_1
-        IVX_CHECK_STATUS(vxCopyDistribution(ref, data, usage, memType));
+        IVX_CHECK_STATUS(vxCopyDistribution(_val, data, usage, memType));
 #else
-        IVX_CHECK_STATUS(vxAccessDistribution(ref, const_cast<void**>(&data), usage));
-        IVX_CHECK_STATUS(vxCommitDistribution(ref, data));
+        IVX_CHECK_STATUS(vxAccessDistribution(_val, const_cast<void**>(&data), usage));
+        IVX_CHECK_STATUS(vxCommitDistribution(_val, data));
         (void)memType;
 #endif
     }
@@ -3199,7 +3138,7 @@ public:
 
     template<typename T>
     void query(vx_enum att, T& value) const
-    { IVX_CHECK_STATUS(vxQueryRemap(ref, att, &value, sizeof(value))); }
+    { IVX_CHECK_STATUS(vxQueryRemap(_val, att, &value, sizeof(value))); }
 
     vx_uint32 srcWidth() const
     {
@@ -3236,10 +3175,10 @@ public:
     { return VX_TYPE_UINT32; }
 
     void setMapping(vx_uint32 dst_x, vx_uint32 dst_y, vx_float32 src_x, vx_float32 src_y)
-    { IVX_CHECK_STATUS(vxSetRemapPoint(ref, dst_x, dst_y, src_x, src_y)); }
+    { IVX_CHECK_STATUS(vxSetRemapPoint(_val, dst_x, dst_y, src_x, src_y)); }
 
     void getMapping(vx_uint32 dst_x, vx_uint32 dst_y, vx_float32 &src_x, vx_float32 &src_y) const
-    { IVX_CHECK_STATUS(vxGetRemapPoint(ref, dst_x, dst_y, &src_x, &src_y)); }
+    { IVX_CHECK_STATUS(vxGetRemapPoint(_val, dst_x, dst_y, &src_x, &src_y)); }
 
 #ifdef IVX_USE_OPENCV
     void setMappings(const cv::Mat& map_x, const cv::Mat& map_y)

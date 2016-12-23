@@ -15,6 +15,7 @@ Details: TBD
 #define IVX_LIB_DEBUG_HPP
 
 #include "ivx.hpp"
+#include <VX/vx_lib_debug.h>
 
 namespace ivx
 {
@@ -25,13 +26,13 @@ namespace debug
 */
 
 //
-void fReadImage(vx_context c, const std::string& path, vx_image img)
+inline void fReadImage(vx_context c, const std::string& path, vx_image img)
 {
     IVX_CHECK_STATUS( vxuFReadImage(c, (vx_char*)path.c_str(), img) );
 }
 
 //
-void fWriteImage(vx_context c, vx_image img, const std::string& path)
+inline void fWriteImage(vx_context c, vx_image img, const std::string& path)
 {
     IVX_CHECK_STATUS( vxuFWriteImage(c, img, (vx_char*)path.c_str()) );
 }
